@@ -58,7 +58,7 @@ code, page = call("/", raw=True)
 text = page.decode("utf-8")
 report("page is served, self-contained", code == 200 and "<canvas" in text and "http://" not in text.replace("http://www.w3.org", "")
        and "https://" not in text, f"{len(page)} bytes")
-report("nothing loaded at start", call("/api/state")[1] == {"loaded": False})
+report("nothing loaded at start", call("/api/state")[1] == {"loaded": False, "rev": 0})
 
 with open(step, "rb") as f:
     code, s = call("/api/open?name=plate.stp", f.read())

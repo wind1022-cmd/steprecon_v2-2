@@ -3,20 +3,25 @@
     open STEP -> blank + features (machined.build) -> parameters -> edit / design-of-experiments -> STEP per variant
 
 The page (studio.html) is served from here too. Only this computer can reach the server (127.0.0.1); nothing is
-sent anywhere else. FreeCAD is not thread-safe, so requests are handled one after the other."""
+sent anywhere else. FreeCAD is not thread-safe: every request that touches the model is run by one worker thread,
+one after the other, while small questions ("anything new?") are answered at once.
+
+An AI assistant drives the same engine through tools.py - over MCP (POST /mcp, see mcp.py) or the chat panel."""
 import csv
 import json
 import math
 import os
+import queue
 import re
+import threading
 import time
 import zipfile
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 import FreeCAD as App
 
-from . import analyze, machined, param_map, params as P
+from . import analyze, machined, mcp, param_map, params as P
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PALETTE = {"hole": "#3b82f6", "fillet": "#10b981", "chamfer": "#f59e0b", "face": "#a855f7", "other": "#64748b"}
@@ -68,6 +73,36 @@ def _face_key(f):
     return (kind, round(f.Area, 3), _r(c))
 
 
+class Worker:
+    """The one thread that touches FreeCAD documents. call() runs a function there and hands back its result."""
+
+    def __init__(self):
+        self.jobs = queue.Queue()
+        self.busy = ""
+        self.thread = threading.Thread(target=self._loop, daemon=True)
+        self.thread.start()
+
+    def _loop(self):
+        while True:
+            fn, a, k, box, done = self.jobs.get()
+            try:
+                box["value"] = fn(*a, **k)
+            except BaseException as e:      # handed to the caller
+                box["error"] = e
+            self.busy = ""
+            done.set()
+
+    def call(self, fn, *a, **k):
+        if threading.current_thread() is self.thread:
+            return fn(*a, **k)
+        box, done = {}, threading.Event()
+        self.jobs.put((fn, a, k, box, done))
+        done.wait()
+        if "error" in box:
+            raise box["error"]
+        return box["value"]
+
+
 class Studio:
     def __init__(self, workspace):
         self.workspace = workspace
@@ -76,6 +111,36 @@ class Studio:
         self.info = None
         self.run_dir = None
         self.rows = []
+        self.worker = Worker()
+        self.rev = 0            # grows whenever the solid on screen is out of date
+        self.quiet = False      # no rev change while variants are being built
+        self.notes = []         # what the assistant did, for the page
+        self.aliases = {}       # feature number -> name given by the assistant
+        self.highlight = 0      # feature number the assistant points at
+        self.plan = None        # DOE plan of the assistant (tools.py)
+
+    def bump(self):
+        if not self.quiet:
+            self.rev += 1
+
+    def note(self, text, kind="ai"):
+        """One line for the activity list of the page."""
+        n = self.notes[-1]["id"] + 1 if self.notes else 1
+        self.notes.append({"id": n, "time": time.strftime("%H:%M:%S"), "kind": kind, "text": text})
+        del self.notes[:-200]
+
+    def pulse(self):
+        """Small and quick: lets the page notice what somebody else (the assistant) changed."""
+        return {"rev": self.rev, "loaded": self.doc is not None, "busy": self.worker.busy,
+                "highlight": self.highlight, "aliases": {str(k): v for k, v in self.aliases.items()},
+                "notes": self.notes[-40:]}
+
+    def changed(self):
+        """{name: value} of the parameters that are not at the part's own value right now."""
+        if self.doc is None:
+            return {}
+        return {p["name"]: p["value"] for p in P.collect(self.doc)
+                if abs(p["value"] - self.base_values.get(p["name"], p["value"])) > 1e-9}
 
     # ------------------------------------------------------------ model
     def open(self, path, name=None):
@@ -94,12 +159,14 @@ class Studio:
         self.doc, self.base, self.fcstd = sess.doc, base, fcstd
         self.ref_volume = ref.Volume
         self._collect()
+        self.aliases, self.highlight, self.plan = {}, 0, None
         self.info = {"name": name, "base": base, "folder": self.dir, "seconds": round(time.time() - t0, 1),
                      "identical": bool(cmp_.get("converged")), "xor_pct": cmp_.get("xor_pct"),
                      "faces": len(ref.Faces), "skipped": report.get("skipped", []),
                      "counts": {"holes": report["holes_made"], "fillets": report["fillets_made"],
                                 "chamfers": report["chamfers_made"], "faces": report.get("faces_made", 0)},
                      "sketches": saved.get("sketches", {})}
+        self.bump()
         return self.state(mesh=True)
 
     def close(self):
@@ -108,6 +175,7 @@ class Studio:
                 App.closeDocument(self.doc.Name)
             except Exception:
                 pass
+            self.bump()
         self.doc, self.info, self.run_dir, self.rows = None, None, None, []
 
     def _collect(self):
@@ -193,7 +261,7 @@ class Studio:
 
     def state(self, mesh=False):
         if self.doc is None:
-            return {"loaded": False}
+            return {"loaded": False, "rev": self.rev}
         current = {p["name"]: p["value"] for p in P.collect(self.doc)}
         feats = []
         for f in self.features:
@@ -214,7 +282,7 @@ class Studio:
             kind = ""
             if cat == "face":
                 kind = str(getattr(self.doc.getObject(f["name"]), "SR_Kind", ""))
-            feats.append({"n": f["n"], "label": f["label"], "type": f["type"], "category": cat, "side": side,
+            feats.append({"n": f["n"], "alias": self.aliases.get(f["n"], ""), "label": f["label"], "type": f["type"], "category": cat, "side": side,
                           "kind": kind,
                           "color": PALETTE[cat], "count": f.get("count", 1),
                           "position": None if a is None else [round(a.x, 3), round(a.y, 3), round(a.z, 3)],
@@ -223,7 +291,7 @@ class Studio:
                                       "value": round(current.get(p["name"], p["value"]), 6),
                                       "unit": "deg" if p["kind"] == "angle" else "mm"} for p in f["params"]]})
         shape = P.result_shape(self.doc)
-        out = {"loaded": True, "info": self.info, "features": feats, "problems": P.problems(self.doc),
+        out = {"loaded": True, "rev": self.rev, "info": self.info, "features": feats, "problems": P.problems(self.doc),
                "measure": self._measure(shape) if shape is not None else None,
                "reference_volume": round(self.ref_volume, 4)}
         if mesh:
@@ -251,6 +319,7 @@ class Studio:
             P.apply(self.doc, self.plist, self.base_values)
         P.apply(self.doc, self.plist, {k: float(v) for k, v in values.items()})
         self.doc.recompute()
+        self.bump()
         return P.problems(self.doc)
 
     # ------------------------------------------------------------ design of experiments
@@ -263,6 +332,7 @@ class Studio:
     def doe_variant(self, index, values):
         row = {"run": index, "ok": False, "file": "", "error": ""}
         row.update({k: float(values.get(k, self.base_values[k])) for k in self.doe_names})
+        quiet, self.quiet = self.quiet, True
         try:
             bad = self.set_values(values)
             if bad:
@@ -275,6 +345,7 @@ class Studio:
                 row["file"], row["ok"] = name, True
         except Exception as e:
             row["error"] = f"{type(e).__name__}: {e}"[:300]
+        self.quiet = quiet
         self.rows.append(row)
         self._write_results()
         return row
@@ -299,6 +370,9 @@ class Studio:
 
 
 def make_handler(studio):
+    def W(fn, *a, **k):
+        return studio.worker.call(fn, *a, **k)
+
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
 
@@ -329,6 +403,9 @@ def make_handler(studio):
 
         def _local_only(self):
             host = (self.headers.get("Host") or "").split(":")[0]
+            origin = self.headers.get("Origin") or ""
+            if origin and urlparse(origin).hostname not in ("127.0.0.1", "localhost"):
+                return False        # a web page from somewhere else must not drive the engine
             return host in ("127.0.0.1", "localhost")
 
         def do_GET(self):
@@ -339,10 +416,14 @@ def make_handler(studio):
                 if url.path in ("/", "/index.html"):
                     with open(os.path.join(HERE, "studio.html"), "rb") as f:
                         return self._send(200, f.read(), "text/html; charset=utf-8")
+                if url.path == "/api/pulse":
+                    return self._send(200, studio.pulse())
                 if url.path == "/api/state":
-                    return self._send(200, studio.state(mesh=True))
+                    return self._send(200, W(studio.state, mesh=True))
                 if url.path == "/api/mesh":
-                    return self._send(200, studio.mesh())
+                    return self._send(200, W(studio.mesh))
+                if url.path == "/mcp":
+                    return self._send(405, {"error": "POST only"}, extra={"Allow": "POST"})
                 if url.path == "/api/file":
                     name = os.path.basename(parse_qs(url.query).get("name", [""])[0])
                     for folder in (studio.run_dir, getattr(studio, "dir", None)):
@@ -381,21 +462,28 @@ def make_handler(studio):
                         path = os.path.join(up, "upload" + ext)
                         with open(path, "wb") as f:
                             f.write(data)
-                    return self._send(200, studio.open(path, name))
+                    studio.worker.busy = "open"
+                    return self._send(200, W(studio.open, path, name))
+                if url.path == "/mcp":
+                    msg = json.loads(self._body().decode("utf-8"))
+                    many = isinstance(msg, list)
+                    out = [r for r in (W(mcp.handle, studio, m) for m in (msg if many else [msg])) if r is not None]
+                    if not out:
+                        return self._send(202, b"")
+                    return self._send(200, out if many else out[0])
                 if url.path == "/api/set":
                     body = self._json()
-                    bad = studio.set_values(body.get("values", {}))
-                    st = studio.state(mesh=not bad)
-                    return self._send(200, st)
+                    bad = W(studio.set_values, body.get("values", {}))
+                    return self._send(200, W(studio.state, mesh=not bad))
                 if url.path == "/api/doe/start":
-                    return self._send(200, studio.doe_start(self._json().get("names", [])))
+                    return self._send(200, W(studio.doe_start, self._json().get("names", [])))
                 if url.path == "/api/doe/variant":
                     b = self._json()
-                    return self._send(200, studio.doe_variant(int(b["index"]), b.get("values", {})))
+                    return self._send(200, W(studio.doe_variant, int(b["index"]), b.get("values", {})))
                 if url.path == "/api/doe/finish":
                     self._body()
-                    out = studio.doe_finish()
-                    out["state"] = studio.state(mesh=True)
+                    out = W(studio.doe_finish)
+                    out["state"] = W(studio.state, mesh=True)
                     return self._send(200, out)
                 if url.path == "/api/reveal":
                     self._body()
@@ -413,5 +501,6 @@ def make_handler(studio):
 def serve(workspace, port=0):
     """Returns (server, studio); call server.serve_forever()."""
     studio = Studio(workspace)
-    server = HTTPServer(("127.0.0.1", port), make_handler(studio))
+    server = ThreadingHTTPServer(("127.0.0.1", port), make_handler(studio))
+    server.daemon_threads = True
     return server, studio

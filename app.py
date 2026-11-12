@@ -4,9 +4,11 @@
     app.cmd C:\\parts\\part.stp    open that file right away
 
 A window opens (the Edge app window if Edge is installed, otherwise your default browser). The engine runs in this
-console window on your own computer only (address 127.0.0.1); close the console to quit. No AI model is used.
+console window on your own computer only (address 127.0.0.1); close the console to quit. The app itself uses no AI
+model; an AI client can drive it over MCP (mcp.cmd, or the address printed at start + /mcp).
 Work files and results go to the folder "steprecon_studio" in your Documents (change with --workspace)."""
 import argparse
+import json
 import os
 import shutil
 import subprocess
@@ -51,11 +53,15 @@ def main():
     server, st = studio.serve(a.workspace, a.port)
     url = f"http://127.0.0.1:{server.server_address[1]}/"
     print(f"STEP Studio  {url}")
+    print(f"MCP          {url}mcp")
+    mark = os.path.join(a.workspace, "studio.json")     # lets mcp_server.py find this engine
+    with open(mark, "w", encoding="utf-8") as f:
+        json.dump({"port": server.server_address[1], "pid": os.getpid()}, f)
     print(f"workspace    {a.workspace}")
     if a.file:
         print(f"opening      {a.file} ...")
         try:
-            s = st.open(os.path.abspath(a.file))
+            s = st.worker.call(st.open, os.path.abspath(a.file))
             c = s["info"]["counts"]
             print(f"             {c['holes']} holes, {c['fillets']} filleted and {c['chamfers']} chamfered edges; "
                   f"identical={s['info']['identical']}")
@@ -69,7 +75,11 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
-        st.close()
+        try:
+            os.remove(mark)
+        except OSError:
+            pass
+        st.worker.call(st.close)
         server.server_close()
 
 

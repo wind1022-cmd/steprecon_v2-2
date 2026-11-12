@@ -150,6 +150,20 @@ td.bad{color:var(--bad);text-align:left;white-space:normal}
 .rfoot{display:flex;gap:6px;padding:10px;border-top:1px solid var(--line);flex-wrap:wrap}
 .toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:var(--ink);color:var(--panel);padding:9px 16px;border-radius:10px;box-shadow:var(--shadow);display:none;z-index:30;max-width:80vw}
 @media (max-width:1100px){main{grid-template-columns:290px minmax(0,1fr) 300px}}
+.aibtn{display:inline-flex;align-items:center;gap:6px}
+.aibtn i{width:7px;height:7px;border-radius:50%;background:var(--accent);display:inline-block}
+.aibtn.new i{animation:aipulse 1.2s ease-in-out infinite}
+.aibtn b{font-weight:600;opacity:.7}
+@keyframes aipulse{50%{transform:scale(1.7);opacity:.45}}
+.ailog{position:absolute;left:16px;bottom:16px;width:min(380px,calc(100% - 32px));max-height:46%;display:none;flex-direction:column;background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);overflow:hidden;z-index:6}
+.ailog.show{display:flex}
+.aihead{display:flex;align-items:center;gap:8px;padding:9px 10px 9px 13px;border-bottom:1px solid var(--line);font-size:12.5px}
+.aihead span{flex:1;color:var(--accent);font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.aihead .x{border:0;background:none;color:var(--mut);font-size:17px;line-height:1;cursor:pointer;padding:0 4px}
+.aibody{overflow:auto;padding:6px 0}
+.ainote{padding:5px 13px;font-size:12.5px;line-height:1.45;overflow-wrap:anywhere}
+.ainote small{color:var(--faint);margin-right:8px;font-variant-numeric:tabular-nums}
+.ainote.warn{color:var(--warn)}
 </style>
 </head>
 <body>
@@ -162,6 +176,7 @@ td.bad{color:var(--bad);text-align:left;white-space:normal}
     <div class="file" id="file"><b id="fname"></b></div>
     <div class="chips" id="chips"></div>
     <div class="sp"></div>
+    <button class="btn ghost sm aibtn" id="aiBtn" style="display:none" title="AI가 한 작업 보기"><i></i>AI 작업 <b id="aiCount">0</b></button>
     <button class="btn" id="openBtn">파일 열기</button>
     <button class="btn ghost icon" id="themeBtn" title="밝게 / 어둡게"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg></button>
     <input type="file" id="pick" accept=".stp,.step,.igs,.iges" hidden>
@@ -191,6 +206,7 @@ td.bad{color:var(--bad);text-align:left;white-space:normal}
         <button class="btn ghost sm" data-view="fit">화면 맞춤</button>
         <button class="btn ghost sm" id="edgesBtn">모서리</button>
       </div>
+      <div class="ailog" id="ailog"><div class="aihead"><b>AI 작업 기록</b><span id="aiBusy"></span><button class="x" id="aiClose" title="닫기">×</button></div><div class="aibody" id="aiBody"></div></div>
       <div class="hint" id="hint" style="display:none">드래그 회전 · 오른쪽 드래그 이동 · 휠 확대</div>
       <div class="empty" id="empty">
         <div class="drop" id="drop">
@@ -240,7 +256,9 @@ async function api(path, opt){
 }
 const post = (path, body) => api(path, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body || {})});
 function pname(short){ const m = short.match(/^([A-Za-z]+?)(\d*)$/); if(!m) return short; const base = PNAME[m[1]] || m[1]; return m[2] && m[2] !== "1" ? base + " " + m[2] : base; }
-function ftitle(f){
+function esc(s){ return String(s).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c])); }
+function ftitle(f){ return f.alias || fauto(f); }
+function fauto(f){
   const p = f.params, get = k => p.find(x => x.short.startsWith(k));
   if(f.category === "hole"){ const d = get("Diameter"); return "구멍" + (d ? " Ø" + fmt(d.base) : "") + (f.count > 1 ? " ×" + f.count : ""); }
   if(f.category === "fillet"){ const r = get("Radius"); return "필렛" + (r ? " R" + fmt(r.base) : "") + (f.count > 1 ? " ×" + f.count : ""); }
@@ -356,10 +374,10 @@ function renderFilters(){
 }
 function renderList(){
   const q = $("q").value.trim().toLowerCase(), open = new Set([...document.querySelectorAll(".feat.open")].map(e => +e.dataset.n));
-  const list = S.features.filter(f => (filter === "all" || f.category === filter) && (!q || (ftitle(f) + " " + f.label + " " + f.n + " " + f.params.map(p => p.short + " " + p.base).join(" ")).toLowerCase().includes(q)));
+  const list = S.features.filter(f => (filter === "all" || f.category === filter) && (!q || (ftitle(f) + " " + fauto(f) + " " + f.label + " " + f.n + " " + f.params.map(p => p.short + " " + p.base).join(" ")).toLowerCase().includes(q)));
   $("list").innerHTML = list.length ? list.map(f => `
     <div class="feat ${open.has(f.n) || S.features.length <= 4 ? "open" : ""} ${sel === f.n ? "sel" : ""}" data-n="${f.n}" style="--c:${f.color}">
-      <div class="fhead"><span class="num">${f.n}</span><div><div class="ftitle">${ftitle(f)}</div><div class="fsub">${f.position ? "위치 " + f.position.map(v => fmt(v, 1)).join(", ") : f.label}</div></div>
+      <div class="fhead"><span class="num">${f.n}</span><div><div class="ftitle">${ftitle(f)}</div><div class="fsub">${f.alias ? fauto(f) + " · " : ""}${f.position ? "위치 " + f.position.map(v => fmt(v, 1)).join(", ") : f.label}</div></div>
         <svg class="caret" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="m9 6 6 6-6 6"/></svg></div>
       <div class="fbody">${f.params.map(p => { const v = p.name in edits ? edits[p.name] : p.base, ch = p.name in edits && +edits[p.name] !== p.base; return `
         <div class="prow"><label title="${p.name}">${pname(p.short)}</label>
@@ -392,7 +410,7 @@ function hud(){
     <div class="stat"><small>표면적 (mm²)</small><b>${fmt(m.area, 1)}</b></div>`;
 }
 function useState(st, keepView){
-  S = Object.assign(S || {}, st);
+  S = Object.assign(S || {}, st); if(st.rev !== undefined) rev = st.rev;
   if(st.mesh) V.setMesh(st.mesh, S.features, keepView);
   $("banner").style.display = st.problems && st.problems.length ? "block" : "none";
   if(st.problems && st.problems.length) $("banner").textContent = "형상을 만들 수 없음: " + st.problems[0];
@@ -400,7 +418,7 @@ function useState(st, keepView){
 }
 function loaded(st){
   S = null; edits = {}; factors = []; sel = 0; hover = 0; rows = []; filter = "all";
-  useState(st, false);
+  useState(st, false); syncEdits();
   const i = S.info, np = S.features.reduce((a, f) => a + f.params.length, 0);
   $("empty").style.display = "none"; $("toolbar").style.display = "flex"; $("hint").style.display = "block";
   $("file").style.display = "flex"; $("fname").textContent = i.name;
@@ -415,6 +433,37 @@ async function openFile(file){
   try{ const buf = await file.arrayBuffer(); loaded(await api("/api/open?name=" + encodeURIComponent(file.name), {method: "POST", body: buf})); }
   catch(e){ toast("열 수 없습니다: " + e.message, 6000); } busy(false);
 }
+
+/* ---------------------------------------------------------------- what somebody else did (an AI over MCP) */
+let rev = -1, noteId = 0, aiOpen = false, aiSeen = 0, aliasKey = "{}", shown = 0, pulsing = false;
+function renderNotes(notes, busyText){
+  $("aiBtn").style.display = notes.length ? "inline-flex" : "none"; $("aiCount").textContent = notes.length;
+  $("aiBtn").classList.toggle("new", !aiOpen && notes.length > 0 && notes[notes.length - 1].id > aiSeen);
+  $("aiBusy").textContent = busyText ? "작업 중 · " + busyText : "";
+  $("aiBody").innerHTML = notes.slice().reverse().map(n => `<div class="ainote ${n.kind === "warn" ? "warn" : ""}"><small>${n.time}</small>${esc(n.text)}</div>`).join("");
+  if(aiOpen && notes.length) aiSeen = notes[notes.length - 1].id;
+}
+function syncEdits(){ edits = {}; for(const f of S.features) for(const q of f.params) if(Math.abs(q.value - q.base) > 1e-9) edits[q.name] = q.value; }
+async function pulse(){
+  if(pulsing || running) return; pulsing = true;
+  try{
+    const p = await api("/api/pulse"), last = p.notes.length ? p.notes[p.notes.length - 1].id : 0;
+    if(last > noteId){ if(noteId && !aiOpen){ aiOpen = true; $("ailog").classList.add("show"); } noteId = last; }
+    renderNotes(p.notes, p.busy);
+    if(p.rev !== rev && !p.busy && !$("overlay").classList.contains("show")){
+      const st = await api("/api/state"); rev = st.rev;
+      if(!st.loaded){ if(S) location.reload(); }
+      else if(!S || S.info.folder !== st.info.folder) loaded(st);
+      else { useState(st, true); syncEdits(); renderList(); showApply(); }
+    }
+    if(S){
+      const key = JSON.stringify(p.aliases);
+      if(key !== aliasKey){ aliasKey = key; for(const f of S.features) f.alias = p.aliases[f.n] || ""; renderList(); renderFactors(); }
+      if(p.highlight !== shown){ shown = p.highlight; if(shown && featById(shown)){ sel = 0; setSel(shown, true); } else if(!shown && sel) setSel(sel); }
+    }
+  }catch(e){} pulsing = false;
+}
+setInterval(pulse, 1000);
 
 /* ---------------------------------------------------------------- DOE */
 function toggleFactor(name){
@@ -481,6 +530,8 @@ async function runDoe(){
 $("runBtn").onclick = runDoe;
 $("backBtn").onclick = async () => { showResults(false); $("doeSub").textContent = "바꿀 치수와 값의 범위를 정하면 모든 조합을 만듭니다"; renderFactors(); await revertEdits(); };
 $("apply").onclick = applyEdits; $("revert").onclick = revertEdits;
+$("aiBtn").onclick = () => { aiOpen = !aiOpen; $("ailog").classList.toggle("show", aiOpen); $("aiBtn").classList.remove("new"); aiSeen = noteId; };
+$("aiClose").onclick = () => { aiOpen = false; $("ailog").classList.remove("show"); };
 $("q").oninput = renderList;
 $("openBtn").onclick = $("openBtn2").onclick = () => $("pick").click();
 $("pick").onchange = e => { openFile(e.target.files[0]); e.target.value = ""; };
