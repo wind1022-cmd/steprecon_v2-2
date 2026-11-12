@@ -185,6 +185,43 @@ def _defeature(shape, face_ids):
     return out.Solids[0] if len(out.Solids) == 1 else out
 
 
+# ------------------------------------------------------------------ progress
+STAGES = {      # stage -> (English, Korean)
+    "blends": ("finding fillets and chamfers", "필렛·모따기 찾는 중"),
+    "defeature": ("taking fillets and chamfers off", "필렛·모따기 떼어 내는 중"),
+    "holes": ("turning holes into features", "구멍을 피처로 만드는 중"),
+    "dress": ("putting fillets and chamfers back", "필렛·모따기 다시 붙이는 중"),
+    "faces": ("checking flat faces", "평면 확인 중"),
+}
+_progress = None        # callable(fraction 0..1, stage, info) while build() runs
+_span = (0.0, 1.0)      # part of the whole that the running step covers
+_last = 0.0             # never report less than before
+_try = {}               # which attempt is running
+
+
+def _tell(stage, frac=0.0, **info):
+    global _last
+    if _progress is None:
+        return
+    lo, hi = _span
+    _last = max(_last, lo + (hi - lo) * max(0.0, min(1.0, frac)))
+    info.update(_try)
+    try:
+        _progress(_last, stage, info)
+    except Exception:       # a broken display must not stop the work
+        pass
+
+
+def describe(stage, info, korean=True):
+    """One line for a progress report, e.g. '구멍을 피처로 만드는 중 4/7 (시도 2/3)'."""
+    text = STAGES.get(stage, (stage, stage))[1 if korean else 0]
+    if info.get("n"):
+        text += f" {info.get('i', 0)}/{info['n']}"
+    if info.get("attempts", 1) > 1:
+        text += f" ({'시도' if korean else 'try'} {info['attempt']}/{info['attempts']})"
+    return text
+
+
 # ------------------------------------------------------------------ building
 def _cut_holes(sess, target, report, exclude):
     """Fill the holes of `target`, use that as blank and cut them again. Returns the set of holes that failed."""
@@ -225,7 +262,8 @@ def _cut_holes(sess, target, report, exclude):
                round(h["radius"], 4), round(h["t1"] - h["t0"], 3))
         jobs.setdefault(key, []).append(h)
     failed = set()
-    for group in jobs.values():
+    for gi, group in enumerate(jobs.values()):
+        _tell("holes", 0.1 + 0.5 * gi / len(jobs), i=gi + 1, n=len(jobs))
         h0 = group[0]
         n = h0["out"]
         entry0 = h0["foot"] + h0["axis"] * h0["end"]
@@ -275,11 +313,13 @@ def _cut_holes(sess, target, report, exclude):
 def _dress(sess, report):
     """Put fillets and chamfers back: the sharp edges of the solid that the reference lacks, with the sizes
     measured there (Session.list_edges). Each group must bring the solid closer to the reference."""
-    for _ in range(40):
+    for k in range(40):
         todo = [e for e in sess.list_edges(only_missing=True).get("edges", []) if e.get("suggest")]
         todo = [e for e in todo if str(e["suggest"]) not in report["_refused"]]
         if not todo:
             return
+        left = len({str(e["suggest"]) for e in todo})
+        _tell("dress", 0.6 + 0.4 * k / (k + left), i=k + 1, n=k + left)
         # largest first: a big fillet has to exist before a small one can run over its end
         first = max((e["suggest"] for e in todo), key=lambda s: list(s.values())[0])
         ids = [e["edge"] for e in todo if e["suggest"] == first]
@@ -433,7 +473,9 @@ def add_face_moves(sess, report, limit=12):
             cands.append((f.Area, i, n, kind, reach))
     cands.sort(key=lambda c: -c[0])
     made = 0
-    for area, i, n, kind, reach in cands[:limit]:
+    chosen = cands[:limit]
+    for ci, (area, i, n, kind, reach) in enumerate(chosen):
+        _tell("faces", ci / len(chosen), i=ci + 1, n=len(chosen))
         name = f"Face{i + 1}"
         face = shape.Faces[i]
         thick = _thickness(shape, face, n)
@@ -516,6 +558,7 @@ def _attempt(ref, blend_faces, exclude_holes):
               "_refused": set()}
     target = ref
     if blend_faces:
+        _tell("defeature", 0.0)
         target = _defeature(ref, blend_faces)
         if target is None:
             return None, report, False
@@ -531,9 +574,21 @@ def _attempt(ref, blend_faces, exclude_holes):
     return sess, report, bool(c.get("converged"))
 
 
-def build(ref):
+def build(ref, progress=None):
     """Reference -> (Session with blank + features, report dict). The result is always identical to the reference:
-    dress-ups that do not come back exactly are given up (first as a whole, then group by group)."""
+    dress-ups that do not come back exactly are given up (first as a whole, then group by group).
+    progress: callable(fraction 0..1, stage, info) told how far the work is (describe() makes a line of it)."""
+    global _progress, _span, _last, _try
+    _progress, _span, _last, _try = progress, (0.0, 0.05), 0.0, {}
+    try:
+        return _build(ref)
+    finally:
+        _progress, _try = None, {}
+
+
+def _build(ref):
+    global _span, _try
+    _tell("blends", 0.0)
     blends = find_blends(ref)
     everything = sorted(i for ids in blends.values() for i in ids)
     plans = [everything] if everything else []
@@ -541,7 +596,9 @@ def build(ref):
         plans += [sorted(ids) for _, ids in sorted(blends.items(), key=lambda kv: str(kv[0]))]
     best = None
     good_groups = []
-    for faces in plans:
+    for k, faces in enumerate(plans):
+        _span = (0.05 + 0.75 * k / len(plans), 0.05 + 0.75 * (k + 1) / len(plans))
+        _try = {"attempt": k + 1, "attempts": len(plans)}
         sess, report, same = _attempt(ref, faces, set())
         if sess is None:
             continue
@@ -554,6 +611,7 @@ def build(ref):
     if best is None and good_groups:        # combine the groups that worked on their own, else take the biggest
         for faces in ([sorted(i for g in good_groups for i in g)] if len(good_groups) > 1 else []) \
                 + [max(good_groups, key=len)]:
+            _span, _try = (_last, _last + (0.8 - _last) / 2), {}
             sess, report, same = _attempt(ref, faces, set())
             if sess is not None and same:
                 best = (sess, report)
@@ -561,9 +619,11 @@ def build(ref):
             if sess is not None:
                 App.closeDocument(sess.doc.Name)
     if best is None:                        # holes only: identical by construction
+        _span, _try = (_last, 0.8), {}
         sess, report, _ = _attempt(ref, [], set())
         best = (sess, report)
     sess, report = best
+    _span, _try = (0.8, 1.0), {}
     try:
         add_face_moves(sess, report)
     except Exception as e:      # an extra: the part itself is complete without it

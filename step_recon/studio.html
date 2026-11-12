@@ -200,6 +200,25 @@ td.bad{color:var(--bad);text-align:left;white-space:normal}
 .ainote{padding:5px 13px;font-size:12.5px;line-height:1.45;overflow-wrap:anywhere}
 .ainote small{color:var(--faint);margin-right:8px;font-variant-numeric:tabular-nums}
 .ainote.warn{color:var(--warn)}
+.cpubtn b{font-weight:600;color:var(--ink);margin-left:4px;font-variant-numeric:tabular-nums}
+.ovbar{height:6px;border-radius:999px;background:var(--line);overflow:hidden;margin:14px 0 6px;display:none}
+.ovbar i{display:block;height:100%;width:0;background:var(--accent);transition:width .35s}
+.ovtime{display:block;color:var(--faint);font-size:11.5px;font-variant-numeric:tabular-nums;min-height:1em}
+.ovcpu{margin-top:10px;border:0;background:none;color:var(--accent);font-size:12px;padding:2px;text-decoration:underline}
+.card span{display:block;max-width:420px;margin:2px auto 0;overflow-wrap:anywhere}
+.pop{position:fixed;top:58px;right:16px;width:330px;max-width:calc(100vw - 32px);background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);padding:12px 14px 13px;display:none;z-index:40}
+.pop.show{display:block}
+.pophead{display:flex;align-items:center}
+.pophead b{font-size:13.5px}
+.pop p{margin:5px 0 12px;color:var(--mut);font-size:12px}
+.pop input[type=range]{width:100%;accent-color:var(--accent)}
+.cpurow{display:flex;align-items:center;gap:8px;margin:6px 0 10px}
+.cpurow b{flex:1;font-variant-numeric:tabular-nums}
+.presets{display:flex;gap:4px}
+.presets button{border:1px solid var(--line);background:var(--panel2);border-radius:6px;padding:2px 7px;font-size:11.5px;color:var(--mut)}
+.presets button:hover{border-color:var(--accent);color:var(--accent)}
+.chk{display:flex;align-items:center;gap:7px;font-size:12.5px;cursor:pointer}
+.pop small{display:block;color:var(--faint);font-size:11.5px;margin-top:9px}
 </style>
 </head>
 <body>
@@ -213,6 +232,7 @@ td.bad{color:var(--bad);text-align:left;white-space:normal}
     <div class="chips" id="chips"></div>
     <div class="sp"></div>
     <button class="btn ghost sm aibtn" id="aiBtn" style="display:none" title="AI가 한 작업 보기"><i></i>AI 작업 <b id="aiCount">0</b></button>
+    <button class="btn ghost sm cpubtn" id="cpuBtn" title="분석에 쓸 CPU 정하기">CPU</button>
     <button class="btn" id="openBtn">파일 열기</button>
     <button class="btn ghost icon" id="themeBtn" title="밝게 / 어둡게"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg></button>
     <input type="file" id="pick" accept=".stp,.step,.igs,.iges" hidden>
@@ -283,7 +303,16 @@ td.bad{color:var(--bad);text-align:left;white-space:normal}
     </aside>
   </main>
 </div>
-<div class="overlay" id="overlay"><div class="card"><div class="spin"></div><b id="ovTitle">분석 중</b><span id="ovSub"></span></div></div>
+<div class="overlay" id="overlay"><div class="card"><div class="spin"></div><b id="ovTitle">분석 중</b><span id="ovSub"></span>
+  <div class="ovbar" id="ovBar"><i></i></div><small class="ovtime" id="ovTime"></small><button class="ovcpu" id="ovCpu">CPU 사용량 바꾸기</button></div></div>
+<div class="pop" id="cpuPop">
+  <div class="pophead"><b>CPU 사용</b><button class="x" id="cpuClose" title="닫기">×</button></div>
+  <p>분석과 DOE에 쓸 프로세서 코어 수입니다. 적게 쓰면 다른 프로그램이 덜 느려지고, 분석은 더 오래 걸릴 수 있습니다.</p>
+  <input type="range" id="cpuRange" min="1" step="1" value="1">
+  <div class="cpurow"><b id="cpuVal"></b><span class="presets" id="cpuPresets"><button data-p="25">25%</button><button data-p="50">50%</button><button data-p="75">75%</button><button data-p="100">전체</button></span></div>
+  <label class="chk"><input type="checkbox" id="cpuLow"> 다른 프로그램 먼저 (낮은 우선순위)</label>
+  <small id="cpuNote">분석 중에도 바로 적용되고, 다음에 실행할 때도 유지됩니다.</small>
+</div>
 <div class="toast" id="toast"></div>
 <script>
 "use strict";
@@ -294,7 +323,7 @@ let S = null, edits = {}, factors = [], filter = "all", sel = 0, hover = 0, runn
 
 const fmt = (v, d = 3) => Number(v).toLocaleString("en-US", {maximumFractionDigits: d});
 function toast(msg, ms = 3200){ const t = $("toast"); t.textContent = msg; t.style.display = "block"; clearTimeout(toast.t); toast.t = setTimeout(() => t.style.display = "none", ms); }
-function busy(on, title = "", sub = ""){ $("overlay").classList.toggle("show", on); $("ovTitle").textContent = title; $("ovSub").textContent = sub; }
+function busy(on, title = "", sub = ""){ $("overlay").classList.toggle("show", on); $("ovTitle").textContent = title; $("ovSub").textContent = sub; $("ovBar").style.display = "none"; $("ovTime").textContent = ""; $("ovCpu").style.display = "none"; }
 async function api(path, opt){
   const r = await fetch(path, opt); const j = await r.json().catch(() => ({error: "응답을 읽을 수 없습니다"}));
   if(!r.ok || j.error) throw new Error(j.error || ("HTTP " + r.status)); return j;
@@ -474,12 +503,13 @@ function loaded(st){
   $("q").value = ""; renderFilters(); renderList(); showApply(); renderFactors(); showResults(false); if(C) renderChat();
 }
 async function openFile(file){
-  if(!file) return; busy(true, "형상을 분석하는 중", file.name + " · 부품이 복잡하면 몇 분 걸릴 수 있습니다");
+  if(!file) return; busy(true, "형상을 분석하는 중", file.name + " · 부품이 복잡하면 몇 분 걸릴 수 있습니다"); watchProgress(true);
   try{ const buf = await file.arrayBuffer(); loaded(await api("/api/open?name=" + encodeURIComponent(file.name), {method: "POST", body: buf})); }
-  catch(e){ toast("열 수 없습니다: " + e.message, 6000); } busy(false);
+  catch(e){ toast("열 수 없습니다: " + e.message, 6000); } watchProgress(false); busy(false);
 }
 
 /* ---------------------------------------------------------------- what somebody else did (an AI over MCP) */
+let remoteBusy = false;
 let rev = -1, noteId = 0, aiOpen = false, aiSeen = 0, aliasKey = "{}", shown = 0, pulsing = false;
 function renderNotes(notes, busyText){
   $("aiBtn").style.display = notes.length ? "inline-flex" : "none"; $("aiCount").textContent = notes.length;
@@ -496,6 +526,9 @@ async function pulse(){
     if(last > noteId){ if(noteId && !aiOpen && !p.chat.busy && tab !== "chat"){ aiOpen = true; $("ailog").classList.add("show"); } noteId = last; }
     if(p.chat.seq !== chatSeq || p.chat.enabled !== (C && C.enabled)) await loadChat();
     renderNotes(p.notes, p.busy);
+    const pr = p.progress || {};
+    if(pr.active && !$("overlay").classList.contains("show")){ remoteBusy = true; busy(true, "형상을 분석하는 중", pr.name || ""); }
+    if(remoteBusy){ if(pr.active) showProgress(pr); else { remoteBusy = false; busy(false); } }
     if(p.rev !== rev && !p.busy && !$("overlay").classList.contains("show")){
       const st = await api("/api/state"); rev = st.rev;
       if(!st.loaded){ if(S) location.reload(); }
@@ -552,6 +585,34 @@ async function sendChat(text){
   try{ await post("/api/chat/send", {text, selected: sel}); $("chatIn").value = ""; await loadChat(); const l = $("chatLog"); l.scrollTop = l.scrollHeight; }catch(e){ toast(e.message); }
 }
 async function answerPlan(ok){ try{ await post("/api/chat/approve", {ok}); await loadChat(); }catch(e){ toast(e.message); } }
+
+/* ---------------------------------------------------------------- CPU setting and progress of an analysis */
+let cpuState = null, cpuTimer = 0, progTimer = 0;
+function fmtTime(s){ s = Math.round(s || 0); return s < 60 ? s + "초" : Math.floor(s / 60) + "분 " + (s % 60) + "초"; }
+function showProgress(p){
+  $("ovBar").style.display = "block"; $("ovBar").firstElementChild.style.width = Math.min(100, p.pct || 0) + "%";
+  if(p.text) $("ovSub").textContent = p.text; $("ovTime").textContent = Math.round(p.pct || 0) + "% · " + fmtTime(p.elapsed) + " 지남"; $("ovCpu").style.display = "inline-block";
+}
+function watchProgress(on){
+  clearInterval(progTimer); if(!on) return;
+  progTimer = setInterval(async () => { try{ const p = await api("/api/progress"); if(p.active) showProgress(p); }catch(e){} }, 400);
+}
+function renderCpu(){
+  const c = cpuState; if(!c) return;
+  $("cpuBtn").innerHTML = `CPU<b>${c.cores}/${c.total}</b>`;
+  $("cpuRange").max = c.total; $("cpuRange").value = c.cores; $("cpuRange").disabled = !c.can_limit;
+  $("cpuPresets").querySelectorAll("button").forEach(b => b.disabled = !c.can_limit);
+  $("cpuVal").textContent = `${c.cores} / ${c.total}코어 · ${Math.round(c.cores / c.total * 100)}%`;
+  $("cpuLow").checked = c.low; $("cpuLow").disabled = c.low && !c.can_raise;
+  $("cpuNote").textContent = !c.can_limit ? "이 시스템에서는 코어 수를 제한할 수 없고 우선순위만 바꿀 수 있습니다."
+    : "분석 중에도 바로 적용되고, 다음에 실행할 때도 유지됩니다.";
+}
+function sendCpu(body, wait = 150){
+  clearTimeout(cpuTimer);
+  cpuTimer = setTimeout(async () => { try{ cpuState = await post("/api/cpu", body); renderCpu(); }catch(e){ toast(e.message); } }, wait);
+}
+async function loadCpu(){ try{ cpuState = await api("/api/cpu"); renderCpu(); }catch(e){} }
+function cpuPop(on){ $("cpuPop").classList.toggle("show", on); if(on) loadCpu(); }
 
 /* ---------------------------------------------------------------- DOE */
 function toggleFactor(name){
@@ -618,6 +679,16 @@ async function runDoe(){
 $("runBtn").onclick = runDoe;
 $("backBtn").onclick = async () => { showResults(false); $("doeSub").textContent = "바꿀 치수와 값의 범위를 정하면 모든 조합을 만듭니다"; renderFactors(); await revertEdits(); };
 $("apply").onclick = applyEdits; $("revert").onclick = revertEdits;
+$("cpuBtn").onclick = e => { e.stopPropagation(); cpuPop(!$("cpuPop").classList.contains("show")); };
+$("ovCpu").onclick = e => { e.stopPropagation(); cpuPop(true); };
+$("cpuClose").onclick = () => cpuPop(false);
+$("cpuPop").onclick = e => e.stopPropagation();
+document.addEventListener("click", () => cpuPop(false));
+$("cpuRange").oninput = () => { const n = +$("cpuRange").value; cpuState.cores = n; renderCpu(); sendCpu({cores: n}); };
+$("cpuPresets").querySelectorAll("button").forEach(b => b.onclick = () => { const n = Math.max(1, Math.round(cpuState.total * +b.dataset.p / 100)); cpuState.cores = n; renderCpu(); sendCpu({cores: n}, 0); });
+$("cpuLow").onchange = () => sendCpu({low: $("cpuLow").checked}, 0);
+loadCpu();
+if(location.hash === "#cpu") setTimeout(() => cpuPop(true), 300);      // used by the automated screenshot
 $("aiBtn").onclick = () => { aiOpen = !aiOpen; $("ailog").classList.toggle("show", aiOpen); $("aiBtn").classList.remove("new"); aiSeen = noteId; };
 $("tabs").querySelectorAll("button").forEach(b => b.onclick = () => setTab(b.dataset.tab, true));
 $("chatSend").onclick = () => sendChat();
@@ -638,7 +709,13 @@ if(V.ok){
   V.onHover = (n, e) => { setHover(n); const t = $("tip"); if(n && e && S){ const f = featById(n); if(f){ const r = $("view").getBoundingClientRect(); t.textContent = f.n + ". " + ftitle(f); t.style.left = (e.clientX - r.left) + "px"; t.style.top = (e.clientY - r.top) + "px"; t.style.display = "block"; return; } } t.style.display = "none"; };
   V.onClick = n => { if(n) { if(sel !== n){ sel = 0; setSel(n, true); } } else if(sel){ setSel(sel); } };
 } else { $("banner").style.display = "block"; $("banner").textContent = "이 브라우저는 3D 표시(WebGL2)를 지원하지 않습니다"; }
-api("/api/state").then(async st => { if(!st.loaded) return; loaded(st);
+async function waitAnalysis(){
+  busy(true, "형상을 분석하는 중", ""); watchProgress(true);
+  for(;;){ await new Promise(r => setTimeout(r, 700)); try{ if(!(await api("/api/progress")).active) break; }catch(e){} }
+  watchProgress(false); busy(false);
+  try{ const st = await api("/api/state"); if(st.loaded) loaded(st); }catch(e){ toast(e.message); }
+}
+api("/api/state").then(async st => { if(!st.loaded){ if(st.analysing) waitAnalysis(); return; } loaded(st);
   if(location.hash === "#selftest"){          // drives the page once without a mouse (used by the automated screenshot)
     const P = allParams(), pick = k => Object.keys(P).find(n => P[n].short.startsWith(k));
     for(const n of [pick("Radius"), pick("Diameter")]) if(n) toggleFactor(n);

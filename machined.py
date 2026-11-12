@@ -18,7 +18,7 @@ import FreeCAD as App
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, ROOT)
-from step_recon import analyze, machined  # noqa: E402
+from step_recon import analyze, cpu, machined  # noqa: E402
 import doe  # noqa: E402  (parameter table and map)
 
 EXTS = (".stp", ".step", ".igs", ".iges")
@@ -38,11 +38,34 @@ def expand(args):
     return list(dict.fromkeys(out))
 
 
+def show_progress(fraction, stage, info):
+    """One line on the console that is rewritten as the analysis goes on (only in a console window)."""
+    if sys.stderr.isatty():
+        line = f"    {100 * fraction:5.1f}%  {machined.describe(stage, info, korean=False)}"
+        sys.stderr.write("\r" + line[:78].ljust(78))
+        sys.stderr.flush()
+
+
+def clear_progress():
+    if sys.stderr.isatty():
+        sys.stderr.write("\r" + " " * 78 + "\r")
+        sys.stderr.flush()
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("files", nargs="+", help="STEP/IGES files, folders or wildcards")
     ap.add_argument("--out", default="out_machined")
+    ap.add_argument("--cpu", default=None, metavar="N",
+                    help="processor cores the engine may use: a number, a percentage (75%%) or all "
+                         "(default: all)")
+    ap.add_argument("--priority", choices=["low", "normal"], default=None,
+                    help="low lets other programs go first (default: normal)")
     a = ap.parse_args()
+    try:
+        cpu.apply(cpu.parse(a.cpu) if a.cpu else None, (a.priority == "low") if a.priority else None)
+    except ValueError as e:
+        raise SystemExit(f"--cpu: {e}")
     files = expand(a.files)
     missing = [f for f in files if not os.path.isfile(f)]
     if not files or missing:
@@ -57,7 +80,8 @@ def main():
                "seconds": "", "error": ""}
         try:
             ref = analyze.load_shape(f)
-            sess, rep = machined.build(ref)
+            sess, rep = machined.build(ref, show_progress)
+            clear_progress()
             saved = sess.save(os.path.join(a.out, base + ".FCStd"))
             cmp_ = sess.compare()
             sk = saved.get("sketches", {})
@@ -76,6 +100,7 @@ def main():
                   f"identical={row['identical']} xor={row['xor_pct']}%, sketches fully constrained "
                   f"{row['sketches_constrained']}")
         except Exception as e:
+            clear_progress()
             row["error"] = f"{type(e).__name__}: {e}"
             print(f"[{n}/{len(files)}] {base}: ERROR {row['error']}")
         if not row["error"]:

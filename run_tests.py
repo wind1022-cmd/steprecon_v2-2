@@ -22,7 +22,9 @@ def main():
     failed = []
     for f in files:
         t0 = time.time()
-        p = subprocess.run([sys.executable, f], capture_output=True, text=True, cwd=ROOT)
+        env = dict(os.environ, PYTHONIOENCODING="utf-8")       # Korean text in the output, whatever the code page
+        p = subprocess.run([sys.executable, f], capture_output=True, text=True, encoding="utf-8", errors="replace",
+                           cwd=ROOT, env=env)
         out = p.stdout + p.stderr
         ok = p.returncode == 0 and not BAD.search(out)
         print(f"{'PASS' if ok else 'FAIL'}  {os.path.basename(f):26s} {time.time() - t0:5.1f}s")

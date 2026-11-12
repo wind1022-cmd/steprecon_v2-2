@@ -12,18 +12,24 @@ uses no AI model. Two ways to add one:
         ANTHROPIC_API_KEY                                              the Claude API
         STEPRECON_BASE_URL (+ STEPRECON_MODEL), --ai openai            an OpenAI-compatible server (Ollama ...)
     Then the conversation and the sizes of the features are sent to that server; the STEP file itself is not.
-Work files and results go to the folder "steprecon_studio" in your Documents (change with --workspace)."""
+Work files and results go to the folder "steprecon_studio" in your Documents (change with --workspace).
+
+How much of the computer an analysis may use: at first half of the processor cores, at low priority so that other
+programs stay responsive. Change it in the window (CPU button, applies at once) or with --cpu 4 / --cpu 75% /
+--cpu all and --priority normal; the last choice is remembered in the workspace (settings.json)."""
 import argparse
 import json
 import os
 import shutil
 import subprocess
 import sys
+import threading
+import time
 import webbrowser
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, ROOT)
-from step_recon import chat, studio  # noqa: E402
+from step_recon import chat, cpu, studio  # noqa: E402
 
 
 def default_workspace():
@@ -53,6 +59,11 @@ def main():
     ap.add_argument("--workspace", default=default_workspace(), help="folder for models and DOE results")
     ap.add_argument("--port", type=int, default=0, help="fixed port (default: any free one)")
     ap.add_argument("--no-window", action="store_true", help="do not open a window (print the address only)")
+    ap.add_argument("--cpu", default=None, metavar="N",
+                    help="processor cores the engine may use: a number, a percentage (75%%) or all "
+                         "(default: what was chosen last time, at first half of the cores)")
+    ap.add_argument("--priority", choices=["low", "normal"], default=None,
+                    help="low lets other programs go first (default: low)")
     ap.add_argument("--ai", default="auto", choices=["auto", "off", "anthropic", "openai"],
                     help="model for the chat panel (default auto: from the environment, off if nothing is set)")
     ap.add_argument("--model", default=None, help="model name for the chat panel")
@@ -75,15 +86,31 @@ def main():
     with open(mark, "w", encoding="utf-8") as f:
         json.dump({"port": server.server_address[1], "pid": os.getpid()}, f)
     print(f"workspace    {a.workspace}")
+    saved = st.load_settings()
+    try:
+        cores = cpu.parse(a.cpu) if a.cpu else saved.get("cpu_cores", cpu.default_cores())
+    except ValueError as e:
+        raise SystemExit(f"--cpu: {e}")
+    low = (a.priority == "low") if a.priority else saved.get("cpu_low", True)
+    c = st.set_cpu(cores, low)
+    print(f"CPU          {c['cores']} of {c['total']} cores" + (", low priority" if c["low"] else "")
+          + ("" if c["can_limit"] else " (the number of cores cannot be limited on this system)"))
     if a.file:
-        print(f"opening      {a.file} ...")
-        try:
-            s = st.worker.call(st.open, os.path.abspath(a.file))
-            c = s["info"]["counts"]
-            print(f"             {c['holes']} holes, {c['fillets']} filleted and {c['chamfers']} chamfered edges; "
-                  f"identical={s['info']['identical']}")
-        except Exception as e:
-            print(f"             could not open it: {type(e).__name__}: {e}")
+        path = os.path.abspath(a.file)
+
+        def open_at_start():
+            try:
+                s = st.worker.call(st.open, path)
+                c = s["info"]["counts"]
+                print(f"opened       {c['holes']} holes, {c['fillets']} filleted and {c['chamfers']} chamfered edges; "
+                      f"identical={s['info']['identical']}, {s['info']['seconds']} s")
+            except Exception as e:
+                print(f"opened       could not open {a.file}: {type(e).__name__}: {e}")
+
+        print(f"opening      {a.file} (progress is shown in the window)")
+        # marked as running before the window asks, so that the page waits for it instead of showing an empty app
+        st.progress = {"active": True, "pct": 0.0, "text": "준비 중", "started": time.time(), "name": os.path.basename(path)}
+        threading.Thread(target=open_at_start, daemon=True).start()
     if not a.no_window:
         print("window       " + open_window(url))
     print("Keep this console open while you work. Close it (or press Ctrl+C) to quit.")

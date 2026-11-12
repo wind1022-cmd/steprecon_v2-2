@@ -21,7 +21,7 @@ from urllib.parse import parse_qs, urlparse
 
 import FreeCAD as App
 
-from . import analyze, chat as chat_mod, machined, mcp, param_map, params as P
+from . import analyze, cpu, chat as chat_mod, machined, mcp, param_map, params as P
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PALETTE = {"hole": "#3b82f6", "fillet": "#10b981", "chamfer": "#f59e0b", "face": "#a855f7", "other": "#64748b"}
@@ -112,6 +112,7 @@ class Studio:
         self.run_dir = None
         self.rows = []
         self.worker = Worker()
+        self.progress = {"active": False}     # how far the running analysis is (open)
         self.rev = 0            # grows whenever the solid on screen is out of date
         self.quiet = False      # no rev change while variants are being built
         self.notes = []         # what the assistant did, for the page
@@ -134,7 +135,7 @@ class Studio:
         """Small and quick: lets the page notice what somebody else (the assistant) changed."""
         return {"rev": self.rev, "loaded": self.doc is not None, "busy": self.worker.busy,
                 "highlight": self.highlight, "aliases": {str(k): v for k, v in self.aliases.items()},
-                "notes": self.notes[-40:], "chat": self.chat.brief()}
+                "notes": self.notes[-40:], "progress": self.progress_public(), "chat": self.chat.brief()}
 
     def changed(self):
         """{name: value} of the parameters that are not at the part's own value right now."""
@@ -143,22 +144,68 @@ class Studio:
         return {p["name"]: p["value"] for p in P.collect(self.doc)
                 if abs(p["value"] - self.base_values.get(p["name"], p["value"])) > 1e-9}
 
+    # ------------------------------------------------------------ settings (CPU), progress
+    def load_settings(self):
+        try:
+            with open(os.path.join(self.workspace, "settings.json"), encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+
+    def save_settings(self, **values):
+        data = self.load_settings()
+        data.update(values)
+        try:
+            with open(os.path.join(self.workspace, "settings.json"), "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=1)
+        except OSError:
+            pass
+
+    def set_cpu(self, cores=None, low=None):
+        """Cores the engine may use and low priority; applies at once, also to an analysis that is running."""
+        st = cpu.apply(cores, low)
+        self.save_settings(cpu_cores=st["cores"], cpu_low=st["low"])
+        return st
+
+    def _step(self, pct, text):
+        self.progress.update(pct=round(max(self.progress.get("pct", 0.0), pct), 1), text=text)
+
+    def progress_public(self):
+        p = dict(self.progress)
+        if p.get("active"):
+            p["elapsed"] = round(time.time() - p.pop("started"), 1)
+        return p
+
     # ------------------------------------------------------------ model
     def open(self, path, name=None):
         """Read a STEP/IGES file and turn it into blank + features."""
+        self.progress = {"active": True, "pct": 0.0, "text": "준비 중", "started": time.time(),
+                         "name": name or os.path.basename(path)}
+        try:
+            return self._open(path, name)
+        finally:
+            self.progress = {"active": False}
+
+    def _open(self, path, name):
         t0 = time.time()
         self.close()
         name = name or os.path.basename(path)
         base = re.sub(r"[^A-Za-z0-9_.-]+", "_", os.path.splitext(name)[0]) or "part"
         self.dir = os.path.join(self.workspace, base + time.strftime("_%Y%m%d_%H%M%S"))
         os.makedirs(self.dir, exist_ok=True)
+        self._step(1, "STEP 파일 읽는 중")
         ref = analyze.load_shape(path)
-        sess, report = machined.build(ref)
+        self._step(5, f"형상 읽음: 면 {len(ref.Faces)}개")
+        sess, report = machined.build(ref, lambda f, stage, info: self._step(5 + 80 * f, machined.describe(stage, info)))
         fcstd = os.path.join(self.dir, base + ".FCStd")
+        self._step(86, "모델 저장 중 (스케치에 치수 넣는 중)")
         saved = sess.save(fcstd)
+        self._step(93, "원본과 비교하는 중")
         cmp_ = sess.compare()
         self.doc, self.base, self.fcstd = sess.doc, base, fcstd
         self.ref_volume = ref.Volume
+        self._step(95, "바꿀 수 있는 치수 정리 중")
         self._collect()
         self.aliases, self.highlight, self.plan = {}, 0, None
         self.info = {"name": name, "base": base, "folder": self.dir, "seconds": round(time.time() - t0, 1),
@@ -168,6 +215,7 @@ class Studio:
                                 "chamfers": report["chamfers_made"], "faces": report.get("faces_made", 0)},
                      "sketches": saved.get("sketches", {})}
         self.bump()
+        self._step(97, "3D 화면 데이터 만드는 중")
         return self.state(mesh=True)
 
     def close(self):
@@ -421,7 +469,13 @@ def make_handler(studio):
                     return self._send(200, studio.pulse())
                 if url.path == "/api/chat":
                     return self._send(200, studio.chat.public())
+                if url.path == "/api/progress":
+                    return self._send(200, studio.progress_public())
+                if url.path == "/api/cpu":
+                    return self._send(200, cpu.state())
                 if url.path == "/api/state":
+                    if studio.progress.get("active"):       # do not wait minutes for the analysis to end
+                        return self._send(200, {"loaded": False, "analysing": True, "rev": getattr(studio, "rev", 0)})
                     return self._send(200, W(studio.state, mesh=True))
                 if url.path == "/api/mesh":
                     return self._send(200, W(studio.mesh))
@@ -489,6 +543,14 @@ def make_handler(studio):
                     except ValueError as e:
                         return self._send(400, {"error": str(e)})
                     return self._send(404, {"error": "not found"})
+                if url.path == "/api/cpu":
+                    b = self._json()
+                    try:
+                        cores = None if b.get("cores") is None else int(b["cores"])
+                    except (TypeError, ValueError):
+                        return self._send(400, {"error": "cores must be a number"})
+                    low = None if b.get("low") is None else bool(b["low"])
+                    return self._send(200, studio.set_cpu(cores, low))
                 if url.path == "/api/set":
                     body = self._json()
                     bad = W(studio.set_values, body.get("values", {}))

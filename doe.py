@@ -25,7 +25,7 @@ import sys
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, ROOT)
-from step_recon import param_map, params as P  # noqa: E402
+from step_recon import cpu, param_map, params as P  # noqa: E402
 import FreeCAD as App  # noqa: E402
 
 
@@ -164,7 +164,16 @@ def main():
     ap.add_argument("--out", help="output folder (default: doe_<name> next to the model)")
     ap.add_argument("--save-fcstd", action="store_true", help="also save every variant as .FCStd")
     ap.add_argument("--max-runs", type=int, default=500, help="refuse larger experiments (default 500)")
+    ap.add_argument("--cpu", default=None, metavar="N",
+                    help="processor cores the engine may use: a number, a percentage (75%%) or all "
+                         "(default: all)")
+    ap.add_argument("--priority", choices=["low", "normal"], default=None,
+                    help="low lets other programs go first (default: normal)")
     a = ap.parse_args()
+    try:
+        cpu.apply(cpu.parse(a.cpu) if a.cpu else None, (a.priority == "low") if a.priority else None)
+    except ValueError as e:
+        raise SystemExit(f"--cpu: {e}")
     if not os.path.isfile(a.fcstd):
         raise SystemExit(f"file not found: {a.fcstd}")
     base = os.path.splitext(os.path.basename(a.fcstd))[0]
