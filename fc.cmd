@@ -1,7 +1,7 @@
 @echo off
 rem Run a project script with FreeCAD's bundled Python - no PowerShell needed (use when .ps1 scripts are blocked).
 rem   fc.cmd run_tests.py
-rem   fc.cmd run.py C:\parts --backend openai --model qwen3:8b
+rem   fc.cmd app.py C:\parts\part.stp
 rem FreeCAD is searched in %LOCALAPPDATA%\Programs and %ProgramFiles%; override with FREECAD_PYTHON.
 setlocal
 set "PY="

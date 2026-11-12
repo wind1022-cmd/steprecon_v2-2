@@ -1,3 +1,0 @@
-# Only needed for the Claude API backend. The local-model (OpenAI-compatible) backend uses the standard library only.
-# FreeCAD itself is NOT a pip package: install FreeCAD 1.x separately (see README.md).
-anthropic>=0.40

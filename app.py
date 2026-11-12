@@ -7,7 +7,7 @@ A window opens (the Edge app window if Edge is installed, otherwise your default
 console window on your own computer only (address 127.0.0.1); close the console to quit. Without settings the app
 uses no AI model. Two ways to add one:
   - an AI client drives the app over MCP (mcp.cmd, or the address printed at start + /mcp);
-  - the chat panel in the window, when a model is configured through the environment (same variables as run.py):
+  - the chat panel in the window, when a model is configured through the environment:
         ANTHROPIC_BASE_URL + ANTHROPIC_AUTH_TOKEN (+ ANTHROPIC_MODEL)   a gateway speaking the Anthropic protocol
         ANTHROPIC_API_KEY                                              the Claude API
         STEPRECON_BASE_URL (+ STEPRECON_MODEL), --ai openai            an OpenAI-compatible server (Ollama ...)

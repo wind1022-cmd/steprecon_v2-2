@@ -8,6 +8,7 @@ Result per file: <name>.FCStd with  ImportedBlank -> Hole_D8_x6 -> Hole_D25 -> .
 of every hole are sketch dimensions / feature parameters), and a line in summary.csv."""
 import argparse
 import csv
+import glob
 import json
 import os
 import sys
@@ -19,7 +20,22 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, ROOT)
 from step_recon import analyze, machined  # noqa: E402
 import doe  # noqa: E402  (parameter table and map)
-import run  # noqa: E402  (file/folder/wildcard expansion)
+
+EXTS = (".stp", ".step", ".igs", ".iges")
+
+
+def expand(args):
+    """Files, folders (all STEP/IGES inside, recursively) and wildcards (Windows shells do not expand them)."""
+    out = []
+    for a in args:
+        if os.path.isdir(a):
+            for root, _, files in os.walk(a):
+                out += [os.path.join(root, f) for f in sorted(files) if f.lower().endswith(EXTS)]
+        elif any(c in a for c in "*?["):
+            out += [p for p in sorted(glob.glob(a, recursive=True)) if p.lower().endswith(EXTS)]
+        else:
+            out.append(a)
+    return list(dict.fromkeys(out))
 
 
 def main():
@@ -27,7 +43,7 @@ def main():
     ap.add_argument("files", nargs="+", help="STEP/IGES files, folders or wildcards")
     ap.add_argument("--out", default="out_machined")
     a = ap.parse_args()
-    files = run.expand(a.files)
+    files = expand(a.files)
     missing = [f for f in files if not os.path.isfile(f)]
     if not files or missing:
         raise SystemExit("file not found: " + ", ".join(missing or a.files)

@@ -1,11 +1,11 @@
-"""LLM backends for the reconstruction agent.
+"""LLM backends for the chat panel.
 
   anthropic : Claude API (needs ANTHROPIC_API_KEY), or any gateway speaking the Anthropic Messages protocol
               (ANTHROPIC_BASE_URL + ANTHROPIC_AUTH_TOKEN, as used for Claude Code) - then standard library only
   openai    : any OpenAI-compatible /chat/completions server -- Ollama, LM Studio, vLLM, llama.cpp server,
               OpenAI itself. Standard library only (no extra pip packages).
 
-Both expose the same tiny interface so agent.py does not care which one is used:
+Both expose the same tiny interface so chat.py does not care which one is used:
     start(system, tools, user_text) -> None
     complete() -> Reply(text, calls)         # one model turn
     add_results([(Call, result_str), ...])   # feed tool results back

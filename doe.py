@@ -1,6 +1,6 @@
 """Design of experiments on a reconstructed model: change its parameters and write one STEP file per variant.
 
-Works on any .FCStd made by run.py or machined.py. No AI model is used.
+Works on any .FCStd made by machined.py. No AI model is used.
 
 1. See what can be varied:
        fc.cmd doe.py out_machined\\housing.FCStd --list
@@ -156,7 +156,7 @@ def write_parameter_files(fcstd):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("fcstd", help="model written by run.py or machined.py")
+    ap.add_argument("fcstd", help="model written by machined.py")
     ap.add_argument("--list", action="store_true", help="show the parameters and write <name>.params.csv")
     ap.add_argument("--vary", action="append", default=[], metavar="NAME=VALUES",
                     help="a:b:n or v1,v2,...; several --vary give every combination")
