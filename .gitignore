@@ -1,0 +1,10 @@
+# downloaded / generated -- never commit (the Fusion 360 Gallery data is licensed for non-commercial research only)
+data/
+vendor/
+out*/
+dist/
+__pycache__/
+*.pyc
+*.FCStd
+*.FCStd1
+*.bat

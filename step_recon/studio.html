@@ -1,0 +1,508 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>STEP Studio</title>
+<style>
+:root{
+  --bg:#f3f5f8;--panel:#ffffff;--panel2:#f7f9fb;--ink:#17202b;--mut:#637083;--faint:#94a0b1;--line:#e1e6ed;
+  --accent:#2563eb;--accent-ink:#fff;--accent-soft:#e8effe;--ok:#0f9d6b;--ok-soft:#e3f6ee;--warn:#b45309;--warn-soft:#fdf1dd;
+  --bad:#c53030;--bad-soft:#fde8e8;--view1:#eef2f7;--view2:#dfe6ef;--solid:#c9d1dc;--edge:#2a3442;--shadow:0 6px 24px rgba(20,30,50,.10);
+  --hole:#3b82f6;--fillet:#10b981;--chamfer:#f59e0b;--face:#a855f7;--other:#64748b;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){
+  --bg:#0f1318;--panel:#171c23;--panel2:#1c222b;--ink:#e7ecf2;--mut:#98a4b5;--faint:#6c7888;--line:#28303b;
+  --accent:#5b8cff;--accent-ink:#0b1220;--accent-soft:#1c2a4a;--ok:#34d399;--ok-soft:#12332a;--warn:#fbbf24;--warn-soft:#3a2c10;
+  --bad:#f87171;--bad-soft:#3b1a1a;--view1:#1a2029;--view2:#11161d;--solid:#7f8b9b;--edge:#0a0d12;--shadow:0 8px 28px rgba(0,0,0,.45);
+}}
+:root[data-theme=dark]{
+  --bg:#0f1318;--panel:#171c23;--panel2:#1c222b;--ink:#e7ecf2;--mut:#98a4b5;--faint:#6c7888;--line:#28303b;
+  --accent:#5b8cff;--accent-ink:#0b1220;--accent-soft:#1c2a4a;--ok:#34d399;--ok-soft:#12332a;--warn:#fbbf24;--warn-soft:#3a2c10;
+  --bad:#f87171;--bad-soft:#3b1a1a;--view1:#1a2029;--view2:#11161d;--solid:#7f8b9b;--edge:#0a0d12;--shadow:0 8px 28px rgba(0,0,0,.45);
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--ink);font:13.5px/1.45 "Segoe UI","Malgun Gothic","Apple SD Gothic Neo",system-ui,sans-serif;overflow:hidden}
+button,input{font:inherit;color:inherit}
+button{cursor:pointer}
+.app{display:grid;grid-template-rows:52px 1fr;height:100%}
+header{display:flex;align-items:center;gap:14px;padding:0 16px;background:var(--panel);border-bottom:1px solid var(--line)}
+.brand{display:flex;align-items:center;gap:9px;font-weight:700;letter-spacing:-.01em;font-size:15px}
+.brand svg{width:24px;height:24px}
+.file{display:none;align-items:center;gap:8px;padding:5px 10px;border-radius:8px;background:var(--panel2);border:1px solid var(--line);max-width:34vw}
+.file b{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.chips{display:flex;gap:6px;flex-wrap:wrap}
+.chip{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:999px;font-size:12px;background:var(--panel2);border:1px solid var(--line);color:var(--mut);white-space:nowrap}
+.chip.ok{background:var(--ok-soft);border-color:transparent;color:var(--ok);font-weight:600}
+.chip.warn{background:var(--warn-soft);border-color:transparent;color:var(--warn);font-weight:600}
+.sp{flex:1}
+.btn{border:1px solid var(--line);background:var(--panel);border-radius:8px;padding:6px 12px;font-weight:600;transition:background .12s,border-color .12s}
+.btn:hover{background:var(--panel2);border-color:var(--faint)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.btn.primary:hover{filter:brightness(1.07)}
+.btn.ghost{border-color:transparent;background:transparent;color:var(--mut)}
+.btn.ghost:hover{background:var(--panel2);color:var(--ink)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+a.btn{text-decoration:none;display:inline-block;color:var(--ink)}a.btn.primary{color:var(--accent-ink)}
+.btn.sm{padding:4px 9px;font-size:12px}
+.icon{width:32px;height:32px;padding:0;display:grid;place-items:center}
+main{display:grid;grid-template-columns:330px minmax(0,1fr) 350px;min-height:0}
+aside{background:var(--panel);display:flex;flex-direction:column;min-height:0}
+aside.left{border-right:1px solid var(--line)}
+aside.right{border-left:1px solid var(--line)}
+.phead{padding:14px 16px 10px;border-bottom:1px solid var(--line)}
+.phead h2{margin:0;font-size:13px;letter-spacing:.02em}
+.phead p{margin:3px 0 0;color:var(--mut);font-size:12px}
+.search{margin-top:10px;position:relative}
+.search input{width:100%;padding:7px 10px 7px 30px;border-radius:8px;border:1px solid var(--line);background:var(--panel2);outline:none}
+.search input:focus{border-color:var(--accent)}
+.search svg{position:absolute;left:9px;top:8px;width:14px;height:14px;color:var(--faint)}
+.filters{display:flex;gap:6px;margin-top:9px;flex-wrap:wrap}
+.fbtn{border:1px solid var(--line);background:var(--panel);border-radius:999px;padding:3px 10px;font-size:12px;color:var(--mut);display:inline-flex;align-items:center;gap:6px}
+.fbtn i{width:8px;height:8px;border-radius:50%;background:var(--c,var(--faint))}
+.fbtn.on{background:var(--ink);color:var(--panel);border-color:var(--ink)}
+.scroll{overflow:auto;flex:1;min-height:0;padding:10px}
+.feat{border:1px solid var(--line);border-radius:10px;margin-bottom:8px;background:var(--panel);transition:border-color .12s,box-shadow .12s}
+.feat.hi{border-color:var(--c)}
+.feat.sel{border-color:var(--c);box-shadow:0 0 0 2px color-mix(in srgb,var(--c) 22%,transparent)}
+.fhead{display:flex;align-items:center;gap:9px;padding:9px 10px;cursor:pointer;user-select:none}
+.num{min-width:24px;height:24px;border-radius:7px;display:grid;place-items:center;font-size:11.5px;font-weight:700;color:#fff;background:var(--c);padding:0 5px}
+.ftitle{font-weight:600;line-height:1.2}
+.fsub{font-size:11.5px;color:var(--mut)}
+.caret{margin-left:auto;color:var(--faint);transition:transform .15s}
+.feat.open .caret{transform:rotate(90deg)}
+.fbody{display:none;border-top:1px dashed var(--line);padding:6px 10px 9px}
+.feat.open .fbody{display:block}
+.prow{display:grid;grid-template-columns:1fr 108px 28px;align-items:center;gap:6px;padding:3px 0}
+.prow label{color:var(--mut);font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.num-in{display:flex;align-items:center;border:1px solid var(--line);border-radius:7px;background:var(--panel2);overflow:hidden}
+.num-in input{width:100%;border:0;background:transparent;padding:5px 4px 5px 8px;outline:none;text-align:right;font-variant-numeric:tabular-nums;min-width:0}
+.num-in span{padding-right:7px;color:var(--faint);font-size:11.5px}
+.num-in.changed{border-color:var(--accent);background:var(--accent-soft)}
+.add{width:26px;height:26px;border-radius:7px;border:1px solid var(--line);background:var(--panel);display:grid;place-items:center;color:var(--mut);font-weight:700;line-height:1}
+.add:hover{border-color:var(--accent);color:var(--accent)}
+.add.on{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.applybar{display:none;gap:8px;padding:10px;border-top:1px solid var(--line);background:var(--panel2);align-items:center}
+.applybar.show{display:flex}
+.applybar span{flex:1;color:var(--mut);font-size:12px}
+.view{position:relative;min-width:0;background:radial-gradient(120% 90% at 50% 20%,var(--view1),var(--view2))}
+canvas{position:absolute;inset:0;width:100%;height:100%;display:block;outline:none;touch-action:none}
+.toolbar{position:absolute;left:50%;bottom:16px;transform:translateX(-50%);display:flex;gap:4px;padding:5px;border-radius:12px;background:color-mix(in srgb,var(--panel) 88%,transparent);backdrop-filter:blur(8px);border:1px solid var(--line);box-shadow:var(--shadow)}
+.toolbar .sepv{width:1px;background:var(--line);margin:4px 3px}
+.hud{position:absolute;left:14px;top:14px;display:flex;gap:8px;flex-wrap:wrap;pointer-events:none}
+.stat{background:color-mix(in srgb,var(--panel) 86%,transparent);backdrop-filter:blur(8px);border:1px solid var(--line);border-radius:10px;padding:7px 11px;min-width:92px}
+.stat small{display:block;color:var(--mut);font-size:11px}
+.stat b{font-size:14px;font-variant-numeric:tabular-nums}
+.stat em{font-style:normal;font-size:11.5px;margin-left:5px}
+.stat em.up{color:var(--warn)}.stat em.down{color:var(--accent)}
+.tip{position:absolute;pointer-events:none;background:var(--ink);color:var(--panel);padding:4px 8px;border-radius:6px;font-size:12px;white-space:nowrap;transform:translate(12px,12px);display:none;z-index:5}
+.banner{position:absolute;left:50%;top:14px;transform:translateX(-50%);background:var(--bad-soft);color:var(--bad);border-radius:10px;padding:8px 14px;font-weight:600;display:none;max-width:70%;z-index:4}
+.hint{position:absolute;right:14px;bottom:16px;color:var(--faint);font-size:11.5px;pointer-events:none}
+.empty{position:absolute;inset:0;display:grid;place-items:center;padding:24px}
+.drop{width:min(560px,100%);text-align:center;border:2px dashed var(--line);border-radius:18px;padding:38px 28px;background:color-mix(in srgb,var(--panel) 70%,transparent);transition:border-color .15s,transform .15s}
+.drop.over{border-color:var(--accent);transform:scale(1.01)}
+.drop h1{font-size:21px;margin:14px 0 6px;letter-spacing:-.02em}
+.drop p{color:var(--mut);margin:0 0 18px}
+.steps{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:24px;text-align:left}
+.step{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:11px 12px}
+.step b{display:block;font-size:12.5px}.step span{color:var(--mut);font-size:12px}
+.step i{font-style:normal;display:inline-grid;place-items:center;width:20px;height:20px;border-radius:6px;background:var(--accent-soft);color:var(--accent);font-weight:700;font-size:11.5px;margin-bottom:6px}
+.overlay{position:fixed;inset:0;background:color-mix(in srgb,var(--bg) 78%,transparent);backdrop-filter:blur(3px);display:none;place-items:center;z-index:20}
+.overlay.show{display:grid}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:24px 28px;box-shadow:var(--shadow);text-align:center;min-width:300px}
+.spin{width:34px;height:34px;border-radius:50%;border:3px solid var(--line);border-top-color:var(--accent);animation:sp .8s linear infinite;margin:0 auto 14px}
+@keyframes sp{to{transform:rotate(360deg)}}
+.card b{display:block;font-size:15px}.card span{color:var(--mut)}
+.factors{padding:10px;overflow:auto;flex:1;min-height:0}
+.factor{border:1px solid var(--line);border-radius:10px;padding:10px;margin-bottom:8px;border-left:3px solid var(--c)}
+.factor .top{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.factor .top b{font-size:12.5px}.factor .top small{color:var(--mut)}
+.x{margin-left:auto;border:0;background:transparent;color:var(--faint);font-size:16px;line-height:1;padding:2px 5px;border-radius:6px}
+.x:hover{background:var(--panel2);color:var(--bad)}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:7px;overflow:hidden;margin-bottom:8px}
+.seg button{border:0;background:transparent;padding:3px 10px;font-size:12px;color:var(--mut)}
+.seg button.on{background:var(--ink);color:var(--panel)}
+.grid3{display:grid;grid-template-columns:1fr 1fr 70px;gap:6px}
+.fld small{display:block;color:var(--mut);font-size:11px;margin-bottom:2px}
+.fld input{width:100%;border:1px solid var(--line);border-radius:7px;background:var(--panel2);padding:5px 8px;outline:none;font-variant-numeric:tabular-nums}
+.fld input:focus{border-color:var(--accent)}
+.vals{display:flex;flex-wrap:wrap;gap:4px;margin-top:8px}
+.vals span{font-size:11.5px;padding:1px 7px;border-radius:999px;background:var(--panel2);border:1px solid var(--line);font-variant-numeric:tabular-nums}
+.vals span.base{border-color:var(--c);color:var(--ink);font-weight:600}
+.placeholder{color:var(--mut);text-align:center;padding:26px 18px;border:1px dashed var(--line);border-radius:12px;margin:6px}
+.placeholder b{display:block;color:var(--ink);margin-bottom:4px}
+.runbar{border-top:1px solid var(--line);padding:12px;background:var(--panel2)}
+.runbar .row{display:flex;align-items:center;gap:10px}
+.runbar .count{flex:1}.runbar .count b{font-size:16px}.runbar .count small{color:var(--mut);display:block;font-size:11.5px}
+.progress{height:6px;border-radius:999px;background:var(--line);overflow:hidden;margin-top:10px;display:none}
+.progress i{display:block;height:100%;width:0;background:var(--accent);transition:width .2s}
+.results{display:none;flex-direction:column;min-height:0;flex:1}
+.results.show{display:flex}
+.rtable{overflow:auto;flex:1;min-height:0}
+table{border-collapse:collapse;width:100%;font-size:12.5px}
+th,td{padding:6px 9px;text-align:right;border-bottom:1px solid var(--line);white-space:nowrap;font-variant-numeric:tabular-nums}
+th{position:sticky;top:0;background:var(--panel);color:var(--mut);font-weight:600;font-size:11.5px;z-index:1}
+th:first-child,td:first-child{text-align:left}
+tbody tr{cursor:pointer}tbody tr:hover td{background:var(--panel2)}tbody tr.on td{background:var(--accent-soft)}
+td.bad{color:var(--bad);text-align:left;white-space:normal}
+.dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--ok);margin-right:6px}.dot.bad{background:var(--bad)}
+.rfoot{display:flex;gap:6px;padding:10px;border-top:1px solid var(--line);flex-wrap:wrap}
+.toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:var(--ink);color:var(--panel);padding:9px 16px;border-radius:10px;box-shadow:var(--shadow);display:none;z-index:30;max-width:80vw}
+@media (max-width:1100px){main{grid-template-columns:290px minmax(0,1fr) 300px}}
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div class="brand">
+      <svg viewBox="0 0 24 24" fill="none"><path d="M12 2.5 3.5 7v10L12 21.5 20.5 17V7L12 2.5Z" stroke="var(--accent)" stroke-width="1.7" stroke-linejoin="round"/><path d="M3.5 7 12 11.5 20.5 7M12 11.5v10" stroke="var(--accent)" stroke-width="1.7" stroke-linejoin="round"/><circle cx="12" cy="6.9" r="1.7" fill="var(--accent)"/></svg>
+      STEP Studio
+    </div>
+    <div class="file" id="file"><b id="fname"></b></div>
+    <div class="chips" id="chips"></div>
+    <div class="sp"></div>
+    <button class="btn" id="openBtn">파일 열기</button>
+    <button class="btn ghost icon" id="themeBtn" title="밝게 / 어둡게"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg></button>
+    <input type="file" id="pick" accept=".stp,.step,.igs,.iges" hidden>
+  </header>
+  <main>
+    <aside class="left">
+      <div class="phead">
+        <h2>바꿀 수 있는 형상</h2>
+        <p id="leftSub">STEP 파일을 열면 여기에 나타납니다</p>
+        <div class="search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.2-3.2"/></svg><input id="q" placeholder="이름, 번호, 값으로 찾기"></div>
+        <div class="filters" id="filters"></div>
+      </div>
+      <div class="scroll" id="list"></div>
+      <div class="applybar" id="applybar"><span id="applyMsg"></span><button class="btn sm" id="revert">되돌리기</button><button class="btn sm primary" id="apply">적용</button></div>
+    </aside>
+    <section class="view" id="view">
+      <canvas id="gl" tabindex="0"></canvas>
+      <div class="hud" id="hud"></div>
+      <div class="banner" id="banner"></div>
+      <div class="tip" id="tip"></div>
+      <div class="toolbar" id="toolbar" style="display:none">
+        <button class="btn ghost sm" data-view="iso">등각</button>
+        <button class="btn ghost sm" data-view="top">위</button>
+        <button class="btn ghost sm" data-view="front">정면</button>
+        <button class="btn ghost sm" data-view="right">측면</button>
+        <div class="sepv"></div>
+        <button class="btn ghost sm" data-view="fit">화면 맞춤</button>
+        <button class="btn ghost sm" id="edgesBtn">모서리</button>
+      </div>
+      <div class="hint" id="hint" style="display:none">드래그 회전 · 오른쪽 드래그 이동 · 휠 확대</div>
+      <div class="empty" id="empty">
+        <div class="drop" id="drop">
+          <svg width="46" height="46" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V4m0 0L8 8m4-4 4 4"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>
+          <h1>STEP 파일을 여기에 놓으세요</h1>
+          <p>히스토리가 없는 형상에서 구멍, 필렛, 모따기, 두께를 찾아 바꿀 수 있는 치수로 만듭니다</p>
+          <button class="btn primary" id="openBtn2">파일 선택</button>
+          <div class="steps">
+            <div class="step"><i>1</i><b>열기</b><span>형상을 분석해 피처를 분리합니다</span></div>
+            <div class="step"><i>2</i><b>확인·수정</b><span>3D에서 위치를 보고 치수를 바꿔 봅니다</span></div>
+            <div class="step"><i>3</i><b>DOE 실행</b><span>조합마다 STEP 파일을 만듭니다</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+    <aside class="right">
+      <div class="phead"><h2>실험 계획 (DOE)</h2><p id="doeSub">바꿀 치수와 값의 범위를 정하면 모든 조합을 만듭니다</p></div>
+      <div class="factors" id="factors"></div>
+      <div class="results" id="results">
+        <div class="rtable"><table><thead id="rhead"></thead><tbody id="rbody"></tbody></table></div>
+        <div class="rfoot" id="rfoot"></div>
+      </div>
+      <div class="runbar">
+        <div class="row"><div class="count"><b id="nruns">0</b> 개 조합<small id="nrunsSub">변수를 추가하세요</small></div>
+          <button class="btn" id="backBtn" style="display:none">설정으로</button>
+          <button class="btn primary" id="runBtn" disabled>실행</button></div>
+        <div class="progress" id="progress"><i></i></div>
+      </div>
+    </aside>
+  </main>
+</div>
+<div class="overlay" id="overlay"><div class="card"><div class="spin"></div><b id="ovTitle">분석 중</b><span id="ovSub"></span></div></div>
+<div class="toast" id="toast"></div>
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const CAT = {hole:"구멍", fillet:"필렛", chamfer:"모따기", face:"두께·면", other:"기타"};
+const PNAME = {Diameter:"지름", DistanceX:"X 위치", DistanceY:"Y 위치", Distance:"거리", Radius:"반지름", Size:"크기", Length:"깊이", Depth:"깊이", Angle:"각도", Thickness:"면까지 치수", Offset:"이동량"};
+let S = null, edits = {}, factors = [], filter = "all", sel = 0, hover = 0, running = false, rows = [], showEdges = true;
+
+const fmt = (v, d = 3) => Number(v).toLocaleString("en-US", {maximumFractionDigits: d});
+function toast(msg, ms = 3200){ const t = $("toast"); t.textContent = msg; t.style.display = "block"; clearTimeout(toast.t); toast.t = setTimeout(() => t.style.display = "none", ms); }
+function busy(on, title = "", sub = ""){ $("overlay").classList.toggle("show", on); $("ovTitle").textContent = title; $("ovSub").textContent = sub; }
+async function api(path, opt){
+  const r = await fetch(path, opt); const j = await r.json().catch(() => ({error: "응답을 읽을 수 없습니다"}));
+  if(!r.ok || j.error) throw new Error(j.error || ("HTTP " + r.status)); return j;
+}
+const post = (path, body) => api(path, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body || {})});
+function pname(short){ const m = short.match(/^([A-Za-z]+?)(\d*)$/); if(!m) return short; const base = PNAME[m[1]] || m[1]; return m[2] && m[2] !== "1" ? base + " " + m[2] : base; }
+function ftitle(f){
+  const p = f.params, get = k => p.find(x => x.short.startsWith(k));
+  if(f.category === "hole"){ const d = get("Diameter"); return "구멍" + (d ? " Ø" + fmt(d.base) : "") + (f.count > 1 ? " ×" + f.count : ""); }
+  if(f.category === "fillet"){ const r = get("Radius"); return "필렛" + (r ? " R" + fmt(r.base) : "") + (f.count > 1 ? " ×" + f.count : ""); }
+  if(f.category === "chamfer"){ const s = get("Size"); return "모따기" + (s ? " " + fmt(s.base) : "") + (f.count > 1 ? " ×" + f.count : ""); }
+  if(f.category === "face"){ const t = get("Thickness"); return (t ? (f.kind === "land" ? "가공면 " : "두께 ") + fmt(t.base) : "면 이동") + (f.side ? " · " + f.side.replace("-", "−") + " 면" : ""); }
+  return f.label;
+}
+
+/* ---------------------------------------------------------------- 3D viewer (WebGL2, no libraries) */
+const V = (() => {
+  const cv = $("gl"), gl = cv.getContext("webgl2", {antialias: true, preserveDrawingBuffer: true});
+  if(!gl) return {ok: false};
+  const vs = `#version 300 es
+  in vec3 aPos; in vec3 aNor; in vec3 aCol; in float aId;
+  uniform vec3 uR, uU, uD, uT; uniform vec2 uS; uniform float uDepth;
+  out vec3 vN; out vec3 vC; flat out float vId;
+  void main(){ vec3 p = aPos - uT; gl_Position = vec4(dot(p,uR)/uS.x, dot(p,uU)/uS.y, -dot(p,uD)/uDepth, 1.0); vN = aNor; vC = aCol; vId = aId; }`;
+  const fs = `#version 300 es
+  precision highp float; in vec3 vN; in vec3 vC; flat in float vId;
+  uniform vec3 uR, uU, uD, uBase; uniform float uHi, uSel, uPick, uDim; out vec4 o;
+  void main(){
+    float fid = abs(vId);        // negative = a "quiet" feature (movable face): coloured only when pointed at
+    if(uPick > 0.5){ float id = fid + 0.5; o = vec4(mod(floor(id), 256.0)/255.0, floor(id/256.0)/255.0, 0.0, 1.0); return; }
+    vec3 n = normalize(vN); if(dot(n, uD) < 0.0) n = -n;
+    float l = 0.30 + 0.56*dot(n, uD) + 0.14*max(0.0, dot(n, normalize(uU*0.8 + uR*0.5)));
+    bool feat = fid > 0.5; bool hot = feat && (abs(fid-uHi) < 0.5 || abs(fid-uSel) < 0.5);
+    vec3 c = feat ? mix(uBase, vC, hot ? 1.0 : (vId < 0.0 ? 0.0 : 0.62)) : uBase;
+    if(uDim > 0.5 && !hot) c = mix(c, uBase, 0.75);
+    c *= l; if(hot) c = c*1.12 + 0.07;
+    o = vec4(c, 1.0); }`;
+  const lvs = `#version 300 es
+  in vec3 aPos; uniform vec3 uR, uU, uD, uT; uniform vec2 uS; uniform float uDepth;
+  void main(){ vec3 p = aPos - uT; gl_Position = vec4(dot(p,uR)/uS.x, dot(p,uU)/uS.y, -dot(p,uD)/uDepth - 0.0006, 1.0); }`;
+  const lfs = `#version 300 es
+  precision mediump float; uniform vec4 uCol; out vec4 o; void main(){ o = uCol; }`;
+  function prog(a, b){ const p = gl.createProgram(); for(const [t, s] of [[gl.VERTEX_SHADER, a], [gl.FRAGMENT_SHADER, b]]){ const sh = gl.createShader(t); gl.shaderSource(sh, s); gl.compileShader(sh); if(!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) console.error(gl.getShaderInfoLog(sh)); gl.attachShader(p, sh); } gl.linkProgram(p); return p; }
+  const P = prog(vs, fs), L = prog(lvs, lfs);
+  const U = n => gl.getUniformLocation(P, n), UL = n => gl.getUniformLocation(L, n);
+  let vao = null, lvao = null, nIdx = 0, nLine = 0, bb = [0,0,0,1,1,1];
+  const cam = {yaw: -0.9, pitch: 0.55, target: [0,0,0], scale: 50, radius: 50};
+  let pickFb = null, pickTex = null, pickDepth = null, pw = 0, ph = 0, dirty = true;
+  function css(name){ return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+  function rgb(hex){ hex = hex.replace("#", ""); if(hex.length === 3) hex = hex.split("").map(c => c + c).join(""); return [0,2,4].map(i => parseInt(hex.substr(i, 2), 16) / 255); }
+  function basis(){ const cy = Math.cos(cam.yaw), sy = Math.sin(cam.yaw), cp = Math.cos(cam.pitch), sp = Math.sin(cam.pitch);
+    const D = [cp*cy, cp*sy, sp]; let R = [-sy, cy, 0]; const Uv = [D[1]*R[2]-D[2]*R[1], D[2]*R[0]-D[0]*R[2], D[0]*R[1]-D[1]*R[0]]; return {D, R, U: Uv}; }
+  function setMesh(m, feats, keep){
+    const col = new Float32Array(m.feature.length * 3), id = new Float32Array(m.feature);
+    const cmap = {}, quiet = {}; for(const f of feats){ cmap[f.n] = rgb(f.color); quiet[f.n] = f.category === "face"; }
+    for(let i = 0; i < m.feature.length; i++){ const c = cmap[m.feature[i]] || [.5,.5,.5]; if(quiet[m.feature[i]]) id[i] = -id[i]; col[3*i] = c[0]; col[3*i+1] = c[1]; col[3*i+2] = c[2]; }
+    vao = gl.createVertexArray(); gl.bindVertexArray(vao);
+    const put = (name, data, n) => { const b = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b); gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW); const loc = gl.getAttribLocation(P, name); if(loc >= 0){ gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, n, gl.FLOAT, false, 0, 0); } };
+    put("aPos", new Float32Array(m.positions), 3); put("aNor", new Float32Array(m.normals), 3); put("aCol", col, 3); put("aId", id, 1);
+    const ib = gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint32Array(m.indices), gl.STATIC_DRAW); nIdx = m.indices.length;
+    lvao = gl.createVertexArray(); gl.bindVertexArray(lvao);
+    const lb = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, lb); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(m.lines), gl.STATIC_DRAW);
+    const ll = gl.getAttribLocation(L, "aPos"); gl.enableVertexAttribArray(ll); gl.vertexAttribPointer(ll, 3, gl.FLOAT, false, 0, 0); nLine = m.lines.length / 3;
+    gl.bindVertexArray(null); bb = m.bbox;
+    cam.radius = Math.max(Math.hypot(bb[3]-bb[0], bb[4]-bb[1], bb[5]-bb[2]) / 2, 1e-6);
+    if(!keep) fit(); dirty = true;
+  }
+  function fit(){ cam.target = [(bb[0]+bb[3])/2, (bb[1]+bb[4])/2, (bb[2]+bb[5])/2]; cam.scale = cam.radius * 1.18; dirty = true; }
+  function view(name){ const v = {iso: [-0.9, 0.55], top: [-Math.PI/2, Math.PI/2 - 1e-4], front: [-Math.PI/2, 0], right: [0, 0]}[name]; if(v){ cam.yaw = v[0]; cam.pitch = v[1]; } fit(); }
+  function resize(){ const r = cv.getBoundingClientRect(), d = Math.min(window.devicePixelRatio || 1, 2), w = Math.max(2, Math.round(r.width*d)), h = Math.max(2, Math.round(r.height*d)); if(cv.width !== w || cv.height !== h){ cv.width = w; cv.height = h; dirty = true; } }
+  function uniforms(p, get){ const b = basis(), asp = cv.width / cv.height; gl.useProgram(p);
+    gl.uniform3fv(get("uR"), b.R); gl.uniform3fv(get("uU"), b.U); gl.uniform3fv(get("uD"), b.D); gl.uniform3fv(get("uT"), cam.target);
+    gl.uniform2f(get("uS"), cam.scale * asp, cam.scale); gl.uniform1f(get("uDepth"), cam.radius * 6 + cam.scale * 2); }
+  function draw(){
+    resize(); if(!dirty) return; dirty = false;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, cv.width, cv.height); gl.clearColor(0,0,0,0); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    if(!vao) return; gl.enable(gl.DEPTH_TEST);
+    uniforms(P, U); gl.uniform3fv(U("uBase"), rgb(css("--solid"))); gl.uniform1f(U("uHi"), hover); gl.uniform1f(U("uSel"), sel); gl.uniform1f(U("uPick"), 0); gl.uniform1f(U("uDim"), (hover || sel) ? 1 : 0);
+    gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(1, 1); gl.bindVertexArray(vao); gl.drawElements(gl.TRIANGLES, nIdx, gl.UNSIGNED_INT, 0); gl.disable(gl.POLYGON_OFFSET_FILL);
+    if(showEdges){ uniforms(L, UL); const e = rgb(css("--edge")); gl.uniform4f(UL("uCol"), e[0], e[1], e[2], 0.85); gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA); gl.bindVertexArray(lvao); gl.drawArrays(gl.LINES, 0, nLine); gl.disable(gl.BLEND); }
+    gl.bindVertexArray(null);
+  }
+  function pick(x, y){
+    if(!vao) return 0; const r = cv.getBoundingClientRect(), d = cv.width / r.width; const px = Math.floor((x - r.left) * d), py = Math.floor((r.bottom - y) * d);
+    if(pw !== cv.width || ph !== cv.height){ pw = cv.width; ph = cv.height; pickFb = gl.createFramebuffer(); pickTex = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, pickTex); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, pw, ph, 0, gl.RGBA, gl.UNSIGNED_BYTE, null); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      pickDepth = gl.createRenderbuffer(); gl.bindRenderbuffer(gl.RENDERBUFFER, pickDepth); gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT16, pw, ph);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, pickFb); gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, pickTex, 0); gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, pickDepth); }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, pickFb); gl.viewport(0, 0, pw, ph); gl.clearColor(0,0,0,0); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT); gl.enable(gl.DEPTH_TEST);
+    uniforms(P, U); gl.uniform1f(U("uPick"), 1); gl.bindVertexArray(vao); gl.drawElements(gl.TRIANGLES, nIdx, gl.UNSIGNED_INT, 0); gl.bindVertexArray(null);
+    const px4 = new Uint8Array(4); gl.readPixels(px, py, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px4); gl.bindFramebuffer(gl.FRAMEBUFFER, null); dirty = true;
+    return px4[3] ? px4[0] + px4[1] * 256 : 0;
+  }
+  let drag = null;
+  cv.addEventListener("contextmenu", e => e.preventDefault());
+  cv.addEventListener("pointerdown", e => { cv.setPointerCapture(e.pointerId); drag = {x: e.clientX, y: e.clientY, pan: e.button !== 0 || e.shiftKey, moved: 0}; });
+  cv.addEventListener("pointermove", e => {
+    if(drag){ const dx = e.clientX - drag.x, dy = e.clientY - drag.y; drag.x = e.clientX; drag.y = e.clientY; drag.moved += Math.abs(dx) + Math.abs(dy);
+      if(drag.pan){ const b = basis(), k = 2 * cam.scale / cv.getBoundingClientRect().height; for(let i = 0; i < 3; i++) cam.target[i] += -dx*k*b.R[i] + dy*k*b.U[i]; }
+      else { cam.yaw -= dx * 0.008; cam.pitch = Math.max(-1.5, Math.min(1.5, cam.pitch + dy * 0.008)); }
+      dirty = true; return; }
+    V.onHover && V.onHover(pick(e.clientX, e.clientY), e);
+  });
+  cv.addEventListener("pointerup", e => { const d = drag; drag = null; if(d && d.moved < 4 && e.button === 0) V.onClick && V.onClick(pick(e.clientX, e.clientY)); });
+  cv.addEventListener("pointerleave", () => V.onHover && V.onHover(0, null));
+  cv.addEventListener("wheel", e => { e.preventDefault(); cam.scale *= Math.exp(e.deltaY * 0.0012); dirty = true; }, {passive: false});
+  (function loop(){ draw(); requestAnimationFrame(loop); })();
+  new ResizeObserver(() => { dirty = true; }).observe(cv);
+  return {ok: true, setMesh, view, fit, redraw(){ dirty = true; }, onHover: null, onClick: null};
+})();
+
+/* ---------------------------------------------------------------- left panel */
+function featById(n){ return S.features.find(f => f.n === n); }
+function setHover(n){ if(hover === n) return; hover = n; document.querySelectorAll(".feat").forEach(e => e.classList.toggle("hi", +e.dataset.n === n)); V.redraw(); }
+function setSel(n, scroll){ sel = sel === n ? 0 : n; document.querySelectorAll(".feat").forEach(e => { const on = +e.dataset.n === sel; e.classList.toggle("sel", on); if(on){ e.classList.add("open"); if(scroll) e.scrollIntoView({block: "nearest", behavior: "smooth"}); } }); V.redraw(); }
+function renderFilters(){
+  const counts = {all: S.features.length}; for(const f of S.features) counts[f.category] = (counts[f.category] || 0) + 1;
+  $("filters").innerHTML = ["all", "hole", "fillet", "chamfer", "face", "other"].filter(k => counts[k]).map(k =>
+    `<button class="fbtn ${filter === k ? "on" : ""}" data-f="${k}" style="--c:var(--${k === "all" ? "faint" : k})">${k === "all" ? "" : "<i></i>"}${k === "all" ? "전체" : CAT[k]} ${counts[k]}</button>`).join("");
+  $("filters").querySelectorAll("button").forEach(b => b.onclick = () => { filter = b.dataset.f; renderFilters(); renderList(); });
+}
+function renderList(){
+  const q = $("q").value.trim().toLowerCase(), open = new Set([...document.querySelectorAll(".feat.open")].map(e => +e.dataset.n));
+  const list = S.features.filter(f => (filter === "all" || f.category === filter) && (!q || (ftitle(f) + " " + f.label + " " + f.n + " " + f.params.map(p => p.short + " " + p.base).join(" ")).toLowerCase().includes(q)));
+  $("list").innerHTML = list.length ? list.map(f => `
+    <div class="feat ${open.has(f.n) || S.features.length <= 4 ? "open" : ""} ${sel === f.n ? "sel" : ""}" data-n="${f.n}" style="--c:${f.color}">
+      <div class="fhead"><span class="num">${f.n}</span><div><div class="ftitle">${ftitle(f)}</div><div class="fsub">${f.position ? "위치 " + f.position.map(v => fmt(v, 1)).join(", ") : f.label}</div></div>
+        <svg class="caret" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="m9 6 6 6-6 6"/></svg></div>
+      <div class="fbody">${f.params.map(p => { const v = p.name in edits ? edits[p.name] : p.base, ch = p.name in edits && +edits[p.name] !== p.base; return `
+        <div class="prow"><label title="${p.name}">${pname(p.short)}</label>
+          <div class="num-in ${ch ? "changed" : ""}"><input type="number" step="any" value="${v}" data-p="${p.name}"><span>${p.unit}</span></div>
+          <button class="add ${factors.some(x => x.name === p.name) ? "on" : ""}" data-add="${p.name}" title="DOE 변수로 추가">+</button></div>`; }).join("")}</div>
+    </div>`).join("") : `<div class="placeholder"><b>해당하는 형상이 없습니다</b>검색어나 필터를 바꿔 보세요</div>`;
+  $("list").querySelectorAll(".feat").forEach(el => { const n = +el.dataset.n;
+    el.querySelector(".fhead").onclick = () => { const wasSel = sel === n; if(!wasSel){ sel = 0; setSel(n); } else { el.classList.toggle("open"); } };
+    el.onmouseenter = () => setHover(n); el.onmouseleave = () => setHover(0); });
+  $("list").querySelectorAll("input[data-p]").forEach(inp => inp.oninput = () => { const p = allParams()[inp.dataset.p]; const v = parseFloat(inp.value);
+    if(isNaN(v) || v === p.base) delete edits[p.name]; else edits[p.name] = v; inp.parentElement.classList.toggle("changed", p.name in edits); showApply(); });
+  $("list").querySelectorAll("input[data-p]").forEach(inp => inp.onkeydown = e => { if(e.key === "Enter") applyEdits(); });
+  $("list").querySelectorAll("[data-add]").forEach(b => b.onclick = e => { e.stopPropagation(); toggleFactor(b.dataset.add); });
+}
+function allParams(){ const m = {}; for(const f of S.features) for(const p of f.params) m[p.name] = Object.assign({feature: f}, p); return m; }
+function showApply(){ const n = Object.keys(edits).length; $("applybar").classList.toggle("show", n > 0); $("applyMsg").textContent = n + "개 치수 변경됨"; }
+async function applyEdits(){
+  if(!Object.keys(edits).length) return; busy(true, "형상을 다시 만드는 중");
+  try{ const st = await post("/api/set", {values: edits}); useState(st, true); if(st.problems.length) toast("이 값으로는 형상을 만들 수 없습니다"); }
+  catch(e){ toast(e.message); } busy(false);
+}
+async function revertEdits(){ edits = {}; busy(true, "원래 치수로 되돌리는 중"); try{ useState(await post("/api/set", {values: {}}), true); }catch(e){ toast(e.message); } busy(false); renderList(); showApply(); }
+
+/* ---------------------------------------------------------------- state */
+function hud(){
+  const m = S.measure; if(!m){ $("hud").innerHTML = ""; return; }
+  const dv = (m.volume - S.reference_volume) / S.reference_volume * 100, show = Math.abs(dv) > 0.0005;
+  $("hud").innerHTML = `<div class="stat"><small>부피 (mm³)</small><b>${fmt(m.volume, 1)}</b>${show ? `<em class="${dv > 0 ? "up" : "down"}">${dv > 0 ? "+" : ""}${dv.toFixed(2)}%</em>` : ""}</div>
+    <div class="stat"><small>크기 (mm)</small><b>${fmt(m.size_x, 1)} × ${fmt(m.size_y, 1)} × ${fmt(m.size_z, 1)}</b></div>
+    <div class="stat"><small>표면적 (mm²)</small><b>${fmt(m.area, 1)}</b></div>`;
+}
+function useState(st, keepView){
+  S = Object.assign(S || {}, st);
+  if(st.mesh) V.setMesh(st.mesh, S.features, keepView);
+  $("banner").style.display = st.problems && st.problems.length ? "block" : "none";
+  if(st.problems && st.problems.length) $("banner").textContent = "형상을 만들 수 없음: " + st.problems[0];
+  hud();
+}
+function loaded(st){
+  S = null; edits = {}; factors = []; sel = 0; hover = 0; rows = []; filter = "all";
+  useState(st, false);
+  const i = S.info, np = S.features.reduce((a, f) => a + f.params.length, 0);
+  $("empty").style.display = "none"; $("toolbar").style.display = "flex"; $("hint").style.display = "block";
+  $("file").style.display = "flex"; $("fname").textContent = i.name;
+  $("chips").innerHTML = `<span class="chip ${i.identical ? "ok" : "warn"}">${i.identical ? "✓ 원본과 동일" : "원본과 차이 " + i.xor_pct + "%"}</span>
+    <span class="chip">피처 ${S.features.length}개</span><span class="chip">치수 ${np}개</span><span class="chip">분석 ${i.seconds}초</span>
+    ${i.skipped.length ? `<span class="chip warn" title="${i.skipped.join("\n")}">소재에 남김 ${i.skipped.length}</span>` : ""}`;
+  $("leftSub").textContent = S.features.length ? `피처 ${S.features.length}개 · 클릭하면 3D에서 강조됩니다` : "바꿀 수 있는 형상을 찾지 못했습니다";
+  $("q").value = ""; renderFilters(); renderList(); showApply(); renderFactors(); showResults(false);
+}
+async function openFile(file){
+  if(!file) return; busy(true, "형상을 분석하는 중", file.name + " · 부품이 복잡하면 몇 분 걸릴 수 있습니다");
+  try{ const buf = await file.arrayBuffer(); loaded(await api("/api/open?name=" + encodeURIComponent(file.name), {method: "POST", body: buf})); }
+  catch(e){ toast("열 수 없습니다: " + e.message, 6000); } busy(false);
+}
+
+/* ---------------------------------------------------------------- DOE */
+function toggleFactor(name){
+  if(running) return; const i = factors.findIndex(f => f.name === name);
+  if(i >= 0) factors.splice(i, 1); else { const p = allParams()[name], b = p.base, lo = +(b * 0.8).toPrecision(4), hi = +(b * 1.2).toPrecision(4);
+    factors.push({name, mode: "range", min: b === 0 ? -1 : Math.min(lo, hi), max: b === 0 ? 1 : Math.max(lo, hi), steps: 3, list: [lo, b, hi].join(", ")}); }
+  showResults(false); renderList(); renderFactors();
+}
+function values(f){
+  if(f.mode === "list") return f.list.split(/[,\s]+/).map(Number).filter(v => !isNaN(v) && isFinite(v));
+  const n = Math.max(2, Math.min(50, Math.round(f.steps) || 2)), a = +f.min, b = +f.max; if(isNaN(a) || isNaN(b)) return [];
+  return Array.from({length: n}, (_, i) => +(a + (b - a) * i / (n - 1)).toPrecision(10));
+}
+function total(){ return factors.length ? factors.reduce((a, f) => a * values(f).length, 1) : 0; }
+function renderFactors(){
+  const P = S ? allParams() : {};
+  $("factors").innerHTML = factors.length ? factors.map((f, i) => { const p = P[f.name], vs = values(f); return `
+    <div class="factor" style="--c:${p.feature.color}"><div class="top"><span class="num" style="--c:${p.feature.color}">${p.feature.n}</span><div><b>${ftitle(p.feature)}</b><br><small>${pname(p.short)} · 현재 ${fmt(p.base)} ${p.unit}</small></div><button class="x" data-rm="${i}" title="빼기">×</button></div>
+      <div class="seg"><button class="${f.mode === "range" ? "on" : ""}" data-mode="range" data-i="${i}">범위</button><button class="${f.mode === "list" ? "on" : ""}" data-mode="list" data-i="${i}">값 목록</button></div>
+      ${f.mode === "range" ? `<div class="grid3"><div class="fld"><small>최소</small><input type="number" step="any" value="${f.min}" data-k="min" data-i="${i}"></div><div class="fld"><small>최대</small><input type="number" step="any" value="${f.max}" data-k="max" data-i="${i}"></div><div class="fld"><small>단계</small><input type="number" min="2" max="50" value="${f.steps}" data-k="steps" data-i="${i}"></div></div>`
+        : `<div class="fld"><small>값 (쉼표로 구분)</small><input value="${f.list}" data-k="list" data-i="${i}"></div>`}
+      <div class="vals" data-vals="${i}">${vs.map(v => `<span class="${Math.abs(v - p.base) < 1e-9 ? "base" : ""}">${fmt(v)}</span>`).join("")}</div></div>`; }).join("")
+    : `<div class="placeholder"><b>아직 변수가 없습니다</b>${S ? "왼쪽 목록에서 치수 옆의 <b style=\"display:inline\">+</b> 를 눌러 추가하세요" : "먼저 STEP 파일을 여세요"}</div>`;
+  $("factors").querySelectorAll("[data-rm]").forEach(b => b.onclick = () => toggleFactor(factors[+b.dataset.rm].name));
+  $("factors").querySelectorAll("[data-mode]").forEach(b => b.onclick = () => { factors[+b.dataset.i].mode = b.dataset.mode; renderFactors(); });
+  $("factors").querySelectorAll("input[data-k]").forEach(inp => inp.oninput = () => { const f = factors[+inp.dataset.i]; f[inp.dataset.k] = inp.dataset.k === "list" ? inp.value : parseFloat(inp.value);
+    const p = P[f.name]; $("factors").querySelector(`[data-vals="${inp.dataset.i}"]`).innerHTML = values(f).map(v => `<span class="${Math.abs(v - p.base) < 1e-9 ? "base" : ""}">${fmt(v)}</span>`).join(""); runInfo(); });
+  runInfo();
+}
+function runInfo(){ const n = total(); $("nruns").textContent = n; $("nrunsSub").textContent = !factors.length ? "변수를 추가하세요" : factors.map(f => values(f).length).join(" × ") + (n > 200 ? " · 조합이 많습니다" : ""); $("runBtn").disabled = running || n < 1 || n > 2000; }
+function showResults(on){ $("results").classList.toggle("show", on); $("factors").style.display = on ? "none" : "block"; $("backBtn").style.display = on && !running ? "inline-block" : "none"; $("runBtn").style.display = on && !running && rows.length ? "none" : "inline-block"; if(!on) $("progress").style.display = "none"; }
+function addRow(r){
+  const P = allParams(), tr = document.createElement("tr"); tr.dataset.run = r.run;
+  tr.innerHTML = `<td><span class="dot ${r.ok ? "" : "bad"}"></span>${r.run}</td>` + factors.map(f => `<td>${fmt(r[f.name])}</td>`).join("") + (r.ok ? `<td>${fmt(r.volume, 1)}</td><td>${fmt(r.area, 1)}</td>` : `<td class="bad" colspan="2" title="${(r.error || "").replace(/"/g, "'")}">만들 수 없음</td>`);
+  tr.onclick = () => previewRow(r, tr); $("rbody").appendChild(tr); tr.scrollIntoView({block: "nearest"});
+}
+async function previewRow(r, tr){
+  if(running) return; document.querySelectorAll("#rbody tr").forEach(e => e.classList.toggle("on", e === tr));
+  const vals = {}; for(const f of factors) vals[f.name] = r[f.name]; busy(true, "변형 " + r.run + " 불러오는 중");
+  try{ useState(await post("/api/set", {values: vals}), true); }catch(e){ toast(e.message); } busy(false);
+}
+async function runDoe(){
+  const lists = factors.map(values), combos = lists.reduce((acc, vs) => acc.flatMap(a => vs.map(v => a.concat([v]))), [[]]);
+  if(!combos.length) return; running = true; rows = []; edits = {}; showApply();
+  const P = allParams(); $("rhead").innerHTML = "<tr><th>#</th>" + factors.map(f => `<th title="${f.name}">${P[f.name].feature.n}. ${pname(P[f.name].short)}</th>`).join("") + "<th>부피</th><th>표면적</th></tr>";
+  $("rbody").innerHTML = ""; $("rfoot").innerHTML = ""; showResults(true); $("progress").style.display = "block"; $("runBtn").textContent = "중지"; $("runBtn").disabled = false; $("runBtn").style.display = "inline-block";
+  let stop = false; $("runBtn").onclick = () => { stop = true; $("runBtn").disabled = true; };
+  try{
+    await post("/api/doe/start", {names: factors.map(f => f.name)});
+    for(let i = 0; i < combos.length && !stop; i++){
+      const vals = {}; factors.forEach((f, k) => vals[f.name] = combos[i][k]);
+      const r = await post("/api/doe/variant", {index: i + 1, values: vals}); rows.push(r); addRow(r);
+      $("progress").firstElementChild.style.width = ((i + 1) / combos.length * 100) + "%"; $("nrunsSub").textContent = (i + 1) + " / " + combos.length + " 완료";
+    }
+    const fin = await post("/api/doe/finish"); useState(fin.state, true);
+    $("rfoot").innerHTML = `<a class="btn sm primary" href="/api/file?name=${encodeURIComponent(fin.zip)}">전체 받기 (ZIP)</a><a class="btn sm" href="/api/file?name=results.csv">결과표 (CSV)</a><button class="btn sm" id="reveal">폴더 열기</button>`;
+    $("reveal").onclick = () => post("/api/reveal").catch(e => toast(e.message));
+    $("doeSub").textContent = `${fin.ok} / ${fin.total}개 변형 완료 · 행을 누르면 그 형상을 봅니다`; toast(`${fin.ok}개 변형의 STEP 파일을 만들었습니다`);
+  }catch(e){ toast("실행 중 오류: " + e.message, 6000); }
+  running = false; $("runBtn").textContent = "실행"; $("runBtn").onclick = runDoe; showResults(true); runInfo();
+}
+
+/* ---------------------------------------------------------------- wiring */
+$("runBtn").onclick = runDoe;
+$("backBtn").onclick = async () => { showResults(false); $("doeSub").textContent = "바꿀 치수와 값의 범위를 정하면 모든 조합을 만듭니다"; renderFactors(); await revertEdits(); };
+$("apply").onclick = applyEdits; $("revert").onclick = revertEdits;
+$("q").oninput = renderList;
+$("openBtn").onclick = $("openBtn2").onclick = () => $("pick").click();
+$("pick").onchange = e => { openFile(e.target.files[0]); e.target.value = ""; };
+$("toolbar").querySelectorAll("[data-view]").forEach(b => b.onclick = () => V.view(b.dataset.view));
+$("edgesBtn").onclick = () => { showEdges = !showEdges; V.redraw(); };
+$("themeBtn").onclick = () => { const r = document.documentElement, dark = r.dataset.theme ? r.dataset.theme === "dark" : matchMedia("(prefers-color-scheme:dark)").matches; r.dataset.theme = dark ? "light" : "dark"; V.redraw(); };
+window.addEventListener("dragover", e => { e.preventDefault(); $("drop").classList.add("over"); });
+window.addEventListener("dragleave", () => $("drop").classList.remove("over"));
+window.addEventListener("drop", e => { e.preventDefault(); $("drop").classList.remove("over"); if(e.dataTransfer.files.length) openFile(e.dataTransfer.files[0]); });
+if(V.ok){
+  V.onHover = (n, e) => { setHover(n); const t = $("tip"); if(n && e && S){ const f = featById(n); if(f){ const r = $("view").getBoundingClientRect(); t.textContent = f.n + ". " + ftitle(f); t.style.left = (e.clientX - r.left) + "px"; t.style.top = (e.clientY - r.top) + "px"; t.style.display = "block"; return; } } t.style.display = "none"; };
+  V.onClick = n => { if(n) { if(sel !== n){ sel = 0; setSel(n, true); } } else if(sel){ setSel(sel); } };
+} else { $("banner").style.display = "block"; $("banner").textContent = "이 브라우저는 3D 표시(WebGL2)를 지원하지 않습니다"; }
+api("/api/state").then(async st => { if(!st.loaded) return; loaded(st);
+  if(location.hash === "#selftest"){          // drives the page once without a mouse (used by the automated screenshot)
+    const P = allParams(), pick = k => Object.keys(P).find(n => P[n].short.startsWith(k));
+    for(const n of [pick("Radius"), pick("Diameter")]) if(n) toggleFactor(n);
+    const want = location.search.includes("face") ? "face" : "fillet";
+    const f = S.features.find(x => x.category === want); if(f){ sel = 0; setSel(f.n, true); }
+    if(location.search.includes("run")) await runDoe();
+    document.title = "selftest done"; }
+}).catch(() => {});
+</script>
+</body>
+</html>
