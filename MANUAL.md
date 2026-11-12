@@ -54,7 +54,7 @@ AI가 쓸 수 있는 기능은 11가지입니다: 파일 열기, 부품 설명, 
 ### v2-1. Claude Code에서 조작 (MCP)
 1. 한 번만 등록합니다. 경로는 압축을 푼 폴더로 바꾸세요.
    ```
-   claude mcp add steprecon -- cmd /c "C:\steprecon_v2\mcp.cmd"
+   claude mcp add steprecon -- cmd /c "C:\steprecon_v2-2\mcp.cmd"
    ```
    (이 폴더 안에서 `claude`를 실행하면 등록 없이도 `.mcp.json`의 `steprecon` 서버를 쓸지 물어봅니다.)
 2. Claude Code에서 평소처럼 말합니다. 예:
