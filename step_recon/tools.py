@@ -420,6 +420,7 @@ def run_doe(st, max_seconds=45):
     t0 = time.time()
     budget = max(5.0, float(max_seconds or 45))
     if not plan["started"]:
+        plan["before"] = st.changed()     # also the present values of the factors themselves
         st.doe_start(plan["names"])
         plan["started"] = True
         st.note(f"DOE 실행 시작: {len(plan['rows'])}개 조합")
@@ -435,7 +436,7 @@ def run_doe(st, max_seconds=45):
                 "Call run_doe again to continue.")
     fin = st.doe_finish()           # leaves the part at its original values
     plan["finished"], plan["zip"] = True, fin["zip"]
-    bad = _apply(st, plan["fixed"])
+    bad = _apply(st, plan["before"])
     st.note(f"DOE 완료: {fin['ok']} / {fin['total']}개 변형의 STEP 파일 생성")
     return _summary(st) + ("\nThe part on screen is back at the values it had before the DOE." if not bad else "")
 

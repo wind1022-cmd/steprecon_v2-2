@@ -2,7 +2,7 @@
   "mcpServers": {
     "steprecon": {
       "command": "cmd",
-      "args": ["/c", "mcp.cmd"]
+      "args": ["/c", ".\\mcp.cmd"]
     }
   }
 }

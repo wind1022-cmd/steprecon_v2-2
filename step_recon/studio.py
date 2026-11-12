@@ -21,7 +21,7 @@ from urllib.parse import parse_qs, urlparse
 
 import FreeCAD as App
 
-from . import analyze, machined, mcp, param_map, params as P
+from . import analyze, chat as chat_mod, machined, mcp, param_map, params as P
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PALETTE = {"hole": "#3b82f6", "fillet": "#10b981", "chamfer": "#f59e0b", "face": "#a855f7", "other": "#64748b"}
@@ -118,6 +118,7 @@ class Studio:
         self.aliases = {}       # feature number -> name given by the assistant
         self.highlight = 0      # feature number the assistant points at
         self.plan = None        # DOE plan of the assistant (tools.py)
+        self.chat = chat_mod.Chat(self)     # the chat panel; disabled until serve() is given a model
 
     def bump(self):
         if not self.quiet:
@@ -133,7 +134,7 @@ class Studio:
         """Small and quick: lets the page notice what somebody else (the assistant) changed."""
         return {"rev": self.rev, "loaded": self.doc is not None, "busy": self.worker.busy,
                 "highlight": self.highlight, "aliases": {str(k): v for k, v in self.aliases.items()},
-                "notes": self.notes[-40:]}
+                "notes": self.notes[-40:], "chat": self.chat.brief()}
 
     def changed(self):
         """{name: value} of the parameters that are not at the part's own value right now."""
@@ -418,6 +419,8 @@ def make_handler(studio):
                         return self._send(200, f.read(), "text/html; charset=utf-8")
                 if url.path == "/api/pulse":
                     return self._send(200, studio.pulse())
+                if url.path == "/api/chat":
+                    return self._send(200, studio.chat.public())
                 if url.path == "/api/state":
                     return self._send(200, W(studio.state, mesh=True))
                 if url.path == "/api/mesh":
@@ -471,6 +474,21 @@ def make_handler(studio):
                     if not out:
                         return self._send(202, b"")
                     return self._send(200, out if many else out[0])
+                if url.path.startswith("/api/chat/"):
+                    b, c = self._json(), studio.chat
+                    try:
+                        what = url.path.rsplit("/", 1)[1]
+                        if what == "send":
+                            return self._send(200, c.send(b.get("text"), b.get("selected", 0)))
+                        if what == "approve":
+                            return self._send(200, c.approve(b.get("ok")))
+                        if what == "stop":
+                            return self._send(200, c.stop())
+                        if what == "clear":
+                            return self._send(200, c.clear())
+                    except ValueError as e:
+                        return self._send(400, {"error": str(e)})
+                    return self._send(404, {"error": "not found"})
                 if url.path == "/api/set":
                     body = self._json()
                     bad = W(studio.set_values, body.get("values", {}))
@@ -498,9 +516,11 @@ def make_handler(studio):
     return Handler
 
 
-def serve(workspace, port=0):
-    """Returns (server, studio); call server.serve_forever()."""
+def serve(workspace, port=0, chat=None):
+    """Returns (server, studio); call server.serve_forever(). chat: lambda studio -> chat.Chat (the AI panel)."""
     studio = Studio(workspace)
+    if chat is not None:
+        studio.chat = chat(studio)
     server = ThreadingHTTPServer(("127.0.0.1", port), make_handler(studio))
     server.daemon_threads = True
     return server, studio

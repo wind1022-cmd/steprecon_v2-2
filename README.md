@@ -7,6 +7,10 @@
 > **처음 쓰는 PC라면 [MANUAL.md](MANUAL.md)부터 보세요.** 내려받기 → 설치 → 로컬 AI 준비 → 내 STEP 폴더 실행 →
 > 결과 보기까지 순서대로 적혀 있고, PowerShell 스크립트(.ps1) 실행이 막혔을 때의 방법도 있습니다.
 
+> **v2**: STEP Studio(`app.cmd`, AI 없이 치수 변경·DOE)를 AI가 조작합니다. Claude Code에서 MCP로(`mcp.cmd`),
+> 또는 창 안의 **AI 대화** 탭으로. AI는 프로그램의 기능만 호출하고 형상은 프로그램이 만들고 검사합니다.
+> 사용법은 MANUAL.md의 "AI로 조작하기 (v2)". 관련 코드: `step_recon/tools.py`(기능 11개), `mcp.py`, `chat.py`.
+
 LLM은 교체 가능합니다.
 
 | 백엔드 | 설명 |

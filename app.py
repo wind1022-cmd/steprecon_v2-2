@@ -4,8 +4,14 @@
     app.cmd C:\\parts\\part.stp    open that file right away
 
 A window opens (the Edge app window if Edge is installed, otherwise your default browser). The engine runs in this
-console window on your own computer only (address 127.0.0.1); close the console to quit. The app itself uses no AI
-model; an AI client can drive it over MCP (mcp.cmd, or the address printed at start + /mcp).
+console window on your own computer only (address 127.0.0.1); close the console to quit. Without settings the app
+uses no AI model. Two ways to add one:
+  - an AI client drives the app over MCP (mcp.cmd, or the address printed at start + /mcp);
+  - the chat panel in the window, when a model is configured through the environment (same variables as run.py):
+        ANTHROPIC_BASE_URL + ANTHROPIC_AUTH_TOKEN (+ ANTHROPIC_MODEL)   a gateway speaking the Anthropic protocol
+        ANTHROPIC_API_KEY                                              the Claude API
+        STEPRECON_BASE_URL (+ STEPRECON_MODEL), --ai openai            an OpenAI-compatible server (Ollama ...)
+    Then the conversation and the sizes of the features are sent to that server; the STEP file itself is not.
 Work files and results go to the folder "steprecon_studio" in your Documents (change with --workspace)."""
 import argparse
 import json
@@ -17,7 +23,7 @@ import webbrowser
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, ROOT)
-from step_recon import studio  # noqa: E402
+from step_recon import chat, studio  # noqa: E402
 
 
 def default_workspace():
@@ -47,13 +53,24 @@ def main():
     ap.add_argument("--workspace", default=default_workspace(), help="folder for models and DOE results")
     ap.add_argument("--port", type=int, default=0, help="fixed port (default: any free one)")
     ap.add_argument("--no-window", action="store_true", help="do not open a window (print the address only)")
+    ap.add_argument("--ai", default="auto", choices=["auto", "off", "anthropic", "openai"],
+                    help="model for the chat panel (default auto: from the environment, off if nothing is set)")
+    ap.add_argument("--model", default=None, help="model name for the chat panel")
+    ap.add_argument("--base-url", default=None, help="address of the model server for the chat panel")
+    ap.add_argument("--max-tokens", type=int, default=None, help="output limit per model turn")
     a = ap.parse_args()
     if a.file and not os.path.isfile(a.file):
         raise SystemExit(f"file not found: {a.file}\n(put paths with spaces or parentheses in double quotes)")
-    server, st = studio.serve(a.workspace, a.port)
+    try:
+        chat.from_settings(None, a.ai, model=a.model, base_url=a.base_url, max_tokens=a.max_tokens)
+    except Exception as e:
+        raise SystemExit(f"chat panel: {e}\n(start with --ai off to run without a model)")
+    server, st = studio.serve(a.workspace, a.port, lambda s: chat.from_settings(
+        s, a.ai, model=a.model, base_url=a.base_url, max_tokens=a.max_tokens))
     url = f"http://127.0.0.1:{server.server_address[1]}/"
     print(f"STEP Studio  {url}")
     print(f"MCP          {url}mcp")
+    print("AI chat      " + (st.chat.label if st.chat.factory else "off (no model configured)"))
     mark = os.path.join(a.workspace, "studio.json")     # lets mcp_server.py find this engine
     with open(mark, "w", encoding="utf-8") as f:
         json.dump({"port": server.server_address[1], "pid": os.getpid()}, f)

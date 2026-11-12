@@ -82,7 +82,7 @@ def main():
     url = a.url.rstrip("/") if a.url else None
     out = sys.stdout.buffer
     for line in sys.stdin.buffer:
-        line = line.strip()
+        line = line.strip().lstrip(b"\xef\xbb\xbf").strip()     # some shells put a byte-order mark in front
         if not line:
             continue
         try:

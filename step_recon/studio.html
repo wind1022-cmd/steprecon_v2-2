@@ -150,6 +150,42 @@ td.bad{color:var(--bad);text-align:left;white-space:normal}
 .rfoot{display:flex;gap:6px;padding:10px;border-top:1px solid var(--line);flex-wrap:wrap}
 .toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:var(--ink);color:var(--panel);padding:9px 16px;border-radius:10px;box-shadow:var(--shadow);display:none;z-index:30;max-width:80vw}
 @media (max-width:1100px){main{grid-template-columns:290px minmax(0,1fr) 300px}}
+.tabs{display:flex;border-bottom:1px solid var(--line);padding:0 8px;gap:2px}
+.tabs button{border:0;background:none;padding:12px 10px 10px;font-weight:600;font-size:13px;color:var(--mut);border-bottom:2px solid transparent;display:inline-flex;align-items:center;gap:6px}
+.tabs button.on{color:var(--ink);border-bottom-color:var(--accent)}
+.tabs i{width:7px;height:7px;border-radius:50%;background:var(--accent);display:none}
+.tabs i.on{display:inline-block;animation:aipulse 1.2s ease-in-out infinite}
+.pane{display:none;flex-direction:column;flex:1;min-height:0}
+.pane.on{display:flex}
+.chatlog{flex:1;min-height:0;overflow:auto;padding:12px 12px 4px;display:flex;flex-direction:column;gap:8px}
+.msg{max-width:92%;padding:8px 11px;border-radius:12px;line-height:1.5;overflow-wrap:anywhere;white-space:pre-wrap;font-size:13px}
+.msg.user{align-self:flex-end;background:var(--accent);color:var(--accent-ink);border-bottom-right-radius:4px}
+.msg.ai{align-self:flex-start;background:var(--panel2);border:1px solid var(--line);border-bottom-left-radius:4px}
+.msg.error{align-self:stretch;max-width:100%;background:var(--bad-soft);color:var(--bad);font-size:12.5px}
+.msg.tool{align-self:flex-start;padding:0 4px;color:var(--mut);font-size:12px;display:flex;gap:7px;align-items:baseline}
+.msg.tool::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--ok);flex:none;transform:translateY(-1px)}
+.msg.wait{align-self:flex-start;color:var(--mut);font-size:12.5px;padding:2px 4px}
+.msg.wait::after{content:"";display:inline-block;width:1.2em;text-align:left;animation:dots 1.2s steps(4,end) infinite}
+@keyframes dots{0%{content:""}25%{content:"."}50%{content:".."}75%{content:"..."}}
+.chatintro{color:var(--mut);padding:8px 6px;font-size:12.5px}
+.chatintro b{display:block;color:var(--ink);font-size:13.5px;margin-bottom:4px}
+.chatintro code{background:var(--panel2);border:1px solid var(--line);border-radius:5px;padding:1px 5px;font-size:11.5px}
+.sugg{display:flex;flex-direction:column;gap:6px;margin-top:12px}
+.sugg button{text-align:left;border:1px solid var(--line);background:var(--panel);border-radius:9px;padding:7px 10px;font-size:12.5px;color:var(--ink)}
+.sugg button:hover{border-color:var(--accent);background:var(--accent-soft)}
+.plan{display:none;margin:4px 12px 8px;border:1px solid var(--accent);border-radius:12px;background:var(--accent-soft);overflow:hidden;flex:none;max-height:52%;flex-direction:column}
+.plan.show{display:flex}
+.plan h3{margin:0;padding:10px 12px 2px;font-size:13px}
+.plan p{margin:0;padding:0 12px 8px;color:var(--mut);font-size:12px}
+.plan .ptab{overflow:auto;background:var(--panel);border-top:1px solid var(--line);border-bottom:1px solid var(--line);min-height:0}
+.plan tbody tr{cursor:default}
+.plan .pbtn{display:flex;gap:8px;justify-content:flex-end;padding:9px 10px}
+.chatbar{display:flex;gap:8px;padding:10px 12px 6px;border-top:1px solid var(--line);align-items:flex-end}
+.chatbar textarea{flex:1;resize:none;border:1px solid var(--line);border-radius:10px;background:var(--panel2);padding:8px 10px;font:inherit;color:inherit;outline:none;max-height:120px}
+.chatbar textarea:focus{border-color:var(--accent)}
+.chatfoot{display:flex;gap:8px;align-items:center;padding:0 12px 9px;color:var(--faint);font-size:11px}
+.chatfoot span{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.chatfoot button{border:0;background:none;color:var(--faint);font-size:11px;padding:0;text-decoration:underline}
 .aibtn{display:inline-flex;align-items:center;gap:6px}
 .aibtn i{width:7px;height:7px;border-radius:50%;background:var(--accent);display:inline-block}
 .aibtn.new i{animation:aipulse 1.2s ease-in-out infinite}
@@ -223,6 +259,14 @@ td.bad{color:var(--bad);text-align:left;white-space:normal}
       </div>
     </section>
     <aside class="right">
+      <div class="tabs" id="tabs"><button data-tab="chat">AI 대화<i id="chatDot"></i></button><button data-tab="doe">실험 계획 (DOE)</button></div>
+      <div class="pane" id="paneChat">
+        <div class="chatlog" id="chatLog"></div>
+        <div class="plan" id="planCard"></div>
+        <div class="chatbar"><textarea id="chatIn" rows="2" placeholder="예: 선택한 구멍을 7 mm로 키워줘"></textarea><button class="btn primary" id="chatSend">보내기</button></div>
+        <div class="chatfoot"><span id="chatLabel"></span><button id="chatClear">대화 지우기</button></div>
+      </div>
+      <div class="pane" id="paneDoe">
       <div class="phead"><h2>실험 계획 (DOE)</h2><p id="doeSub">바꿀 치수와 값의 범위를 정하면 모든 조합을 만듭니다</p></div>
       <div class="factors" id="factors"></div>
       <div class="results" id="results">
@@ -234,6 +278,7 @@ td.bad{color:var(--bad);text-align:left;white-space:normal}
           <button class="btn" id="backBtn" style="display:none">설정으로</button>
           <button class="btn primary" id="runBtn" disabled>실행</button></div>
         <div class="progress" id="progress"><i></i></div>
+      </div>
       </div>
     </aside>
   </main>
@@ -426,7 +471,7 @@ function loaded(st){
     <span class="chip">피처 ${S.features.length}개</span><span class="chip">치수 ${np}개</span><span class="chip">분석 ${i.seconds}초</span>
     ${i.skipped.length ? `<span class="chip warn" title="${i.skipped.join("\n")}">소재에 남김 ${i.skipped.length}</span>` : ""}`;
   $("leftSub").textContent = S.features.length ? `피처 ${S.features.length}개 · 클릭하면 3D에서 강조됩니다` : "바꿀 수 있는 형상을 찾지 못했습니다";
-  $("q").value = ""; renderFilters(); renderList(); showApply(); renderFactors(); showResults(false);
+  $("q").value = ""; renderFilters(); renderList(); showApply(); renderFactors(); showResults(false); if(C) renderChat();
 }
 async function openFile(file){
   if(!file) return; busy(true, "형상을 분석하는 중", file.name + " · 부품이 복잡하면 몇 분 걸릴 수 있습니다");
@@ -448,7 +493,8 @@ async function pulse(){
   if(pulsing || running) return; pulsing = true;
   try{
     const p = await api("/api/pulse"), last = p.notes.length ? p.notes[p.notes.length - 1].id : 0;
-    if(last > noteId){ if(noteId && !aiOpen){ aiOpen = true; $("ailog").classList.add("show"); } noteId = last; }
+    if(last > noteId){ if(noteId && !aiOpen && !p.chat.busy && tab !== "chat"){ aiOpen = true; $("ailog").classList.add("show"); } noteId = last; }
+    if(p.chat.seq !== chatSeq || p.chat.enabled !== (C && C.enabled)) await loadChat();
     renderNotes(p.notes, p.busy);
     if(p.rev !== rev && !p.busy && !$("overlay").classList.contains("show")){
       const st = await api("/api/state"); rev = st.rev;
@@ -464,6 +510,48 @@ async function pulse(){
   }catch(e){} pulsing = false;
 }
 setInterval(pulse, 1000);
+
+/* ---------------------------------------------------------------- AI chat panel */
+let C = null, chatSeq = -1, tab = "", tabChosen = false;
+const SUGGEST = ["이 부품에서 바꿀 수 있는 것을 정리해줘", "피처마다 알기 쉬운 이름을 붙여줘", "선택한 피처를 얼마나 키울 수 있는지 알려줘", "구멍 지름과 필렛 반지름으로 9개 실험을 만들어줘"];
+function setTab(t, byUser){ tab = t; if(byUser) tabChosen = true; $("paneChat").classList.toggle("on", t === "chat"); $("paneDoe").classList.toggle("on", t === "doe");
+  $("tabs").querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.tab === t)); if(t === "chat"){ $("chatDot").classList.remove("on"); const l = $("chatLog"); l.scrollTop = l.scrollHeight; } }
+function rich(t){ return esc(t).replace(/\*\*([^*\n]+)\*\*/g, "<b>$1</b>").replace(/`([^`\n]+)`/g, "<code>$1</code>"); }
+function renderChat(){
+  const log = $("chatLog"), stick = log.scrollHeight - log.scrollTop - log.clientHeight < 60;
+  if(!C.enabled){
+    log.innerHTML = `<div class="chatintro"><b>AI 모델이 연결되지 않았습니다</b>프로그램은 AI 없이도 그대로 쓸 수 있습니다. 대화로 조작하려면 둘 중 하나를 쓰세요.<br><br>
+      <b>1. 이 창에서 대화</b>콘솔에서 모델 주소와 토큰을 환경 변수로 정한 뒤 <code>app.cmd</code>를 다시 실행합니다 (설명서의 "AI로 조작하기").<br><br>
+      <b>2. Claude Code에서 조작 (MCP)</b><code>mcp.cmd</code>를 MCP 서버로 등록하면 Claude Code가 이 창의 부품을 다룹니다.</div>`;
+  } else if(!C.items.length){
+    log.innerHTML = `<div class="chatintro"><b>무엇을 바꿀까요?</b>말로 치수를 바꾸고, 가능한 범위를 확인하고, 실험 계획을 만들 수 있습니다. 3D에서 피처를 선택한 뒤 "이거"라고 해도 됩니다.
+      <div class="sugg">${SUGGEST.map(t => `<button>${t}</button>`).join("")}</div></div>`;
+    log.querySelectorAll(".sugg button").forEach(b => b.onclick = () => sendChat(b.textContent));
+  } else {
+    log.innerHTML = C.items.map(m => `<div class="msg ${m.role}">${m.role === "ai" ? rich(m.text) : esc(m.text)}</div>`).join("")
+      + (C.busy && !C.pending ? `<div class="msg wait">${S && $("aiBusy").textContent ? esc($("aiBusy").textContent) : "생각하는 중"}</div>` : "");
+  }
+  if(stick) log.scrollTop = log.scrollHeight;
+  const pl = $("planCard");
+  if(C.pending){ const q = C.pending, P = S ? allParams() : {}, head = n => P[n] ? P[n].feature.n + ". " + pname(P[n].short) : n;
+    pl.innerHTML = `<h3>실험 계획 확인</h3><p>${q.total}개 조합의 STEP 파일을 만듭니다${Object.keys(q.fixed).length ? " · 다른 변경값 " + Object.keys(q.fixed).length + "개 유지" : ""}</p>
+      <div class="ptab"><table><thead><tr><th>#</th>${q.names.map(n => `<th title="${esc(n)}">${esc(head(n))}</th>`).join("")}</tr></thead>
+      <tbody>${q.rows.map((r, i) => `<tr><td>${i + 1}</td>${r.map(v => `<td>${fmt(v)}</td>`).join("")}</tr>`).join("")}${q.total > q.rows.length ? `<tr><td colspan="${q.names.length + 1}">… 외 ${q.total - q.rows.length}개</td></tr>` : ""}</tbody></table></div>
+      <div class="pbtn"><button class="btn sm" id="planNo">취소</button><button class="btn sm primary" id="planYes">실행</button></div>`;
+    pl.classList.add("show"); $("planYes").onclick = () => answerPlan(true); $("planNo").onclick = () => answerPlan(false);
+  } else pl.classList.remove("show");
+  $("chatSend").textContent = C.busy ? "중지" : "보내기"; $("chatSend").disabled = !C.enabled; $("chatIn").disabled = !C.enabled;
+  $("chatLabel").textContent = C.enabled ? C.label + " · 대화 내용과 치수가 이 서버로 전송됩니다" : ""; $("chatLabel").title = $("chatLabel").textContent;
+  $("chatClear").style.display = C.enabled && C.items.length && !C.busy ? "inline" : "none";
+  if(tab !== "chat" && (C.pending || (C.busy && C.items.length))) $("chatDot").classList.add("on");
+}
+async function loadChat(){ try{ C = await api("/api/chat"); chatSeq = C.seq; if(!tab || (!tabChosen && C.enabled && tab !== "chat")) setTab(C.enabled ? "chat" : "doe"); renderChat(); }catch(e){} }
+async function sendChat(text){
+  if(C && C.busy){ post("/api/chat/stop").catch(() => {}); return; }
+  text = (text === undefined ? $("chatIn").value : text).trim(); if(!text) return;
+  try{ await post("/api/chat/send", {text, selected: sel}); $("chatIn").value = ""; await loadChat(); const l = $("chatLog"); l.scrollTop = l.scrollHeight; }catch(e){ toast(e.message); }
+}
+async function answerPlan(ok){ try{ await post("/api/chat/approve", {ok}); await loadChat(); }catch(e){ toast(e.message); } }
 
 /* ---------------------------------------------------------------- DOE */
 function toggleFactor(name){
@@ -531,6 +619,11 @@ $("runBtn").onclick = runDoe;
 $("backBtn").onclick = async () => { showResults(false); $("doeSub").textContent = "바꿀 치수와 값의 범위를 정하면 모든 조합을 만듭니다"; renderFactors(); await revertEdits(); };
 $("apply").onclick = applyEdits; $("revert").onclick = revertEdits;
 $("aiBtn").onclick = () => { aiOpen = !aiOpen; $("ailog").classList.toggle("show", aiOpen); $("aiBtn").classList.remove("new"); aiSeen = noteId; };
+$("tabs").querySelectorAll("button").forEach(b => b.onclick = () => setTab(b.dataset.tab, true));
+$("chatSend").onclick = () => sendChat();
+$("chatIn").onkeydown = e => { if(e.key === "Enter" && !e.shiftKey && !e.isComposing){ e.preventDefault(); sendChat(); } };
+$("chatClear").onclick = async () => { try{ await post("/api/chat/clear"); await loadChat(); }catch(e){ toast(e.message); } };
+loadChat();
 $("aiClose").onclick = () => { aiOpen = false; $("ailog").classList.remove("show"); };
 $("q").oninput = renderList;
 $("openBtn").onclick = $("openBtn2").onclick = () => $("pick").click();
