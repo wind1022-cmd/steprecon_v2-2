@@ -261,7 +261,7 @@ class Studio:
             "planes": [it["faces"][0] for it in pick if it["kind"] == "face"]})
         report, saved, cmp_ = out["report"], {"sketches": out.get("sketches", {})}, out
         if not report.get("features"):      # nothing could be made: stay with the part and its candidates
-            why = "필렛·모따기를 떼었다가 다시 붙였을 때 원본과 똑같아지지 않았습니다 (곡면에 닿은 모따기·필렛에서 흔합니다)" \
+            why = "필렛·모따기를 떼었다가 다시 붙였을 때 원본과 똑같아지지 않았습니다 (곡면에 닿은 필렛, 띠 모양이 아닌 모따기에서 흔합니다)" \
                 if any("fillets/chamfers" in s for s in report.get("skipped", [])) else \
                 "; ".join(report.get("skipped", []))[:200] or "인식한 형상을 다시 만들 수 없었습니다"
             raise ValueError("고른 것을 치수로 만들지 못했습니다: " + why + ". 크기를 바꿀 수는 없지만 '없애기'는 해 볼 수 있습니다."

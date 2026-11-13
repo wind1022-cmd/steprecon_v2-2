@@ -47,7 +47,7 @@ AI는 프로그램의 기능 13가지만 호출하고, 형상은 프로그램이
 | `step_recon/machined.py` | 구멍·필렛·모따기·평면을 찾아 피처로 분리 |
 | `step_recon/cpu.py` | CPU 코어 수와 우선순위 설정 |
 | `step_recon/params.py, param_map.py` | 치수 이름과 값, 파라미터 지도 |
-| `step_recon/sharpen.py` | 기어처럼 밀어낸 형상의 필렛·모따기를 단면 윤곽에서 정확히 없애기 |
+| `step_recon/sharpen.py` | 필렛·모따기를 정확히 없애기(밀어낸 형상은 단면 윤곽, 띠 모양 모따기는 쐐기 채우기, 구멍 입구 모따기는 링 채우기)와 곡면 옆 모따기를 공구로 다시 깎기 |
 | `step_recon/stretch.py` | 면을 움직일 때 둘레 모따기·필렛을 함께 옮기는 형상 연산 |
 | `step_recon/fc_tools.py, constrain.py, compare.py, analyze.py` | FreeCAD 모델 작성, 스케치 구속, 원본 비교, 형상 읽기 |
 | `mcp.cmd / mcp_server.py, step_recon/mcp.py` | MCP 서버 |

@@ -769,6 +769,7 @@ def _attempt(ref, blend_faces, exclude_holes, only_holes=None):
     if blend_faces and not (c.get("converged") or c.get("near")):
         c = _strips_by_tool(sess, ref, blend_faces, report) or c
     report["_excluded_holes"] = exclude_holes
+    report["_cmp"] = {k: c.get(k) for k in ("converged", "near", "xor_pct")}     # so the caller need not compare again
     if c.get("near") and not c.get("converged"):
         report["skipped"].append(f"tiny details were not reproduced: the result differs from the file by "
                                  f"{c.get('xor_pct')}% of the volume ({c.get('ref_faces')} faces in the file, "
@@ -804,7 +805,11 @@ def _strips_by_tool(sess, ref, blend_faces, report, plans=None):
             o.Label = f"Chamfer_{size:g}" + (f"_x{len(ds)}" if len(ds) > 1 else "")
             made.append(o)
         s = sess.result_shape()
-        c = cmp_mod.compare(ref, s) if s is not None else {}
+        c = {}
+        if s is not None:       # faces matched one to one first (a fraction of a second); the booleans only if needed
+            c = cmp_mod.compare(ref, s, quick=True)
+            if not c.get("converged"):
+                c = cmp_mod.compare(ref, s)
         if c.get("converged") or c.get("near"):
             report["chamfers_made"] += len(plans)
             report["features"] += len(made)

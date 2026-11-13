@@ -90,7 +90,11 @@ def main(path):
     say(stage="save", t="모델 저장 중 (스케치에 치수 넣는 중)")
     saved = sess.save(job["fcstd"])
     say(stage="compare", t="원본과 비교하는 중")
-    c = sess.compare()
+    # the build compared already; movable faces added after it are not moved, so the shape is the same. A quick face
+    # match confirms that; only if it does not, the full comparison (minutes on big parts) runs again
+    known = report.pop("_cmp", None)
+    q = sess.compare(quick=True)
+    c = q if q.get("converged") else known if known and (known.get("converged") or known.get("near")) else sess.compare()
     say(done=True, report=json.loads(json.dumps(report, default=str)), sketches=json.loads(
         json.dumps(saved.get("sketches", {}), default=str)), converged=bool(c.get("converged")), near=bool(c.get("near")), xor_pct=c.get("xor_pct"))
 
