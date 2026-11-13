@@ -73,6 +73,42 @@ strip = [i for i, f in enumerate(hollow.Faces) if type(f.Surface).__name__ == "P
 new, gone = sharpen.fill_wedges(hollow, strip)
 report("hollow corner: the wedge is cut away", new is not None and abs(new.Volume - blk.Volume) < 1e-6 and len(gone) == 1)
 
+# ------------------------------------------------------------ curved (spline) flanks, strips with mitred ends
+def spline_gear(z=8):
+    ro, rr, d = 40.0, 35.0, 2 * math.pi / z
+    pt = lambda r, a: V(r * math.cos(a), r * math.sin(a), 0)  # noqa: E731
+    es = []
+    for i in range(z):
+        a = i * d
+        es.append(Part.makeLine(pt(rr, a), pt(rr, a + 0.2 * d)))
+        c1 = Part.BSplineCurve()
+        c1.interpolate([pt(rr, a + 0.2 * d), pt(rr + 1.8, a + 0.275 * d), pt(rr + 3.6, a + 0.335 * d), pt(ro, a + 0.4 * d)])
+        es.append(c1.toShape())
+        es.append(Part.makeLine(pt(ro, a + 0.4 * d), pt(ro, a + 0.6 * d)))
+        c2 = Part.BSplineCurve()
+        c2.interpolate([pt(ro, a + 0.6 * d), pt(rr + 3.6, a + 0.665 * d), pt(rr + 1.8, a + 0.725 * d), pt(rr, a + 0.8 * d)])
+        es.append(c2.toShape())
+        es.append(Part.makeLine(pt(rr, a + 0.8 * d), pt(rr, a + d)))
+    body = Part.Face(Part.Wire(es)).extrude(V(0, 0, W)).fuse(Part.makeCylinder(43.0, 3.0)).removeSplitter().cut(Part.makeCylinder(12, W))
+    tips = [e for e in body.Edges if type(e.Curve).__name__ == "Line" and abs(e.Vertexes[0].Point.z - e.Vertexes[1].Point.z) > W - 3 - 1e-6
+            and abs(math.hypot(e.Vertexes[0].Point.x, e.Vertexes[0].Point.y) - ro) < 1e-6]
+    c1_ = body.makeChamfer(0.35, tips)
+    tops = [e for e in c1_.Edges if all(abs(v.Point.z - W) < 1e-6 for v in e.Vertexes) and e.BoundBox.ZLength < 1e-6
+            and math.hypot(e.CenterOfMass.x, e.CenterOfMass.y) > 20]
+    return body, c1_, c1_.makeChamfer(0.6, tops)
+
+
+body, only_strips, sg = spline_gear()
+scs = machined.scan(sg)
+small = min((g for g in scs["groups"] if g["kind"] == "chamfer"), key=lambda g: g["size"])
+ids = set(small["items"])
+strips = [it["faces"][0] for it in scs["items"] if it["id"] in ids]
+t0 = time.time()
+res = machined.remove_faces_ex(sg, strips)
+gain, took = res["shape"].Volume - sg.Volume, body.Volume - only_strips.Volume
+report("strips between a flat tip and a curved flank, ending at another chamfer: removed (seam lines may stay)",
+       res["method"] == "wedges" and res["failed"] == 0 and res["shape"].isValid() and 0.90 * took < gain < 1.0 * took,
+       f"{time.time() - t0:.1f}s {len(strips)} strips, volume back {gain:.3f} of {took:.3f} (the rest is under the end chamfer)")
 # ------------------------------------------------------------ bolt holes: conical chamfers on the rims
 plain = Part.makeBox(120, 90, 20).fuse(Part.makeCylinder(12, 15, V(60, 45, 20))).removeSplitter()      # block with a boss
 centres = [(15 + 18 * i, 12 + 22 * j) for i in range(6) for j in range(4) if not (40 < 15 + 18 * i < 80 and 30 < 12 + 22 * j < 60)]

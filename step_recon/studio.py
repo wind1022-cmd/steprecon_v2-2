@@ -264,7 +264,8 @@ class Studio:
             why = "필렛·모따기를 떼었다가 다시 붙였을 때 원본과 똑같아지지 않았습니다 (곡면에 닿은 모따기·필렛에서 흔합니다)" \
                 if any("fillets/chamfers" in s for s in report.get("skipped", [])) else \
                 "; ".join(report.get("skipped", []))[:200] or "인식한 형상을 다시 만들 수 없었습니다"
-            raise ValueError("고른 것을 치수로 만들지 못했습니다: " + why + ". 크기를 바꿀 수는 없지만 '없애기'는 해 볼 수 있습니다.")
+            raise ValueError("고른 것을 치수로 만들지 못했습니다: " + why + ". 크기를 바꿀 수는 없지만 '없애기'는 해 볼 수 있습니다."
+                             + self._kinds_of(pick))
         self.selection, self.auto = ([] if everything else items), everything
         self._step(94, "결과 불러오는 중")
         with self._timed("loading the result"):
@@ -421,6 +422,28 @@ class Studio:
         self.cancelled = True
         proc.kill()
         return {"cancelled": True}
+
+    def _kinds_of(self, pick):
+        """' · 고른 면: ... / 이웃 면: ...' - the surface types of the picked faces and of what surrounds them: tells
+        which case is not handled yet when something could not be made."""
+        try:
+            from . import sharpen
+            faces = self.ref.Faces
+            ids = {i for it in pick for i in it["faces"]}
+            if not ids or len(faces) > 20000:
+                return ""
+            adj = sharpen._adjacent(faces)
+            own, around = {}, {}
+            for i in ids:
+                k = type(faces[i].Surface).__name__
+                own[k] = own.get(k, 0) + 1
+                for j in adj[i] - ids:
+                    k = type(faces[j].Surface).__name__
+                    around[k] = around.get(k, 0) + 1
+            return (" · 고른 면: " + ", ".join(f"{k} {v}" for k, v in sorted(own.items()))
+                    + " / 이웃 면: " + ", ".join(f"{k} {v}" for k, v in sorted(around.items())))
+        except Exception:
+            return ""
 
     def _drop_doc(self):
         """Forget the features (the part as read and its candidates stay)."""

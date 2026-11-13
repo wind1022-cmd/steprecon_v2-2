@@ -333,56 +333,179 @@ def _meet(line, plane):
     return p + u * ((d - n.dot(p)) / den)
 
 
-def _wedge(face, others):
-    """The piece a flat chamfer strip cut off: bounded by the strip, the planes of the two faces along its long edges
-    and the planes of the faces at its two ends. `others` = [(edge of the strip, neighbouring face)], one per edge.
-    Returns a solid or None if the strip is not of that simple kind."""
-    if len(others) != 4 or _plane_of(face) is None:
-        return None
-    others = sorted(others, key=lambda x: -x[0].Length)
-    (ea, fa), (eb, fb), (ec, fc), (ed, fd) = others
-    if ec.Length > 0.5 * eb.Length:
-        return None                                 # not a strip
-    pa, pb, pc, pd = _plane_of(fa), _plane_of(fb), _plane_of(fc), _plane_of(fd)
-    if None in (pa, pb, pc, pd):
-        return None
-    line = _line_of(pa, pb)
-    if line is None:
-        return None
-    p1, p2 = _meet(line, pc), _meet(line, pd)
-    if p1 is None or p2 is None or (p1 - p2).Length < 1e-7:
-        return None
-    width = face.Area / max(ea.Length, 1e-12)
-    for q, e in ((p1, ec), (p2, ed)):               # the corner the strip cut off lies close to the strip's end
-        if e.distToShape(Part.Vertex(q))[0] > 6.0 * width + 1e-6:
-            return None
+def _half_space(plane, inside, size):
+    """A big block on the side of plane (normal, offset) that contains point `inside`."""
+    n, d = plane
+    if n.dot(inside) - d < 0:
+        n, d = n * -1, -d
+    x = n.cross(App.Vector(1, 0, 0))
+    if x.Length < 1e-6:
+        x = n.cross(App.Vector(0, 1, 0))
+    x.normalize()
+    y = n.cross(x)
+    foot = inside - n * (n.dot(inside) - d)
+    corner = foot - x * size - y * size
+    return Part.makePlane(2 * size, 2 * size, corner, n, x).extrude(n * size)
 
-    def ends(edge, cap):                            # (vertex at this cap, the other vertex) of a long edge
-        v = [x.Point for x in edge.Vertexes]
-        if len(v) != 2:
-            return None
-        d0, d1 = cap.distToShape(Part.Vertex(v[0]))[0], cap.distToShape(Part.Vertex(v[1]))[0]
-        return (v[0], v[1]) if d0 < d1 else (v[1], v[0])
 
-    a, b = ends(ea, ec), ends(eb, ec)
-    if a is None or b is None:
-        return None
-    a0, a1 = a
-    b0, b1 = b
-
-    def poly(*pts):
-        return Part.Face(Part.makePolygon(list(pts) + [pts[0]]))
-
+def _side_solid(g, edge, inside, size, thick=None, direction=None):
+    """The region on the `inside` side of face g's surface, near `edge`, as a solid: a half-space for a plane; for a
+    curved face (cylinder, extruded profile, spline: the flank of a tooth) its surface, widened where it can be,
+    thickened towards `inside`. None if that cannot be built."""
+    pl = _plane_of(g)
+    if pl is not None:
+        return _half_space(pl, inside, size)
     try:
-        shell = Part.Shell([poly(a0, a1, b1, b0), poly(a0, a1, p2, p1), poly(b0, b1, p2, p1), poly(a0, b0, p1), poly(a1, b1, p2)])
-        solid = Part.Solid(shell)
-        if solid.Volume < 0:
-            solid.reverse()
-        if not solid.isValid() or solid.Volume < 1e-12:
+        srf = g.Surface
+        mid = edge.valueAt((edge.FirstParameter + edge.LastParameter) / 2.0)
+        u, v = srf.parameter(mid)
+        n = srf.normal(u, v)
+        if n.dot(inside - mid) < 0:
+            n = n * -1
+        if direction is not None:               # thicken along this direction instead of the normal
+            n = direction
+        u0, u1, v0, v1 = g.ParameterRange
+        du, dv = (u1 - u0), (v1 - v0)
+        wide = None
+        for grow in (0.5, 0.2, 0.05):           # the surface usually reaches past the trimmed face: use more of it
+            try:
+                b0, b1, c0, c1 = srf.bounds()
+                wide = srf.toShape(max(u0 - grow * du, b0), min(u1 + grow * du, b1),
+                                   max(v0 - grow * dv, c0), min(v1 + grow * dv, c1))
+                if wide is not None and not wide.isNull():
+                    break
+            except Exception:
+                wide = None
+        if wide is None or wide.isNull():
             return None
-        return solid
+        slab = wide.extrude(n * (thick or size))
+        return slab if slab.isValid() and abs(slab.Volume) > 1e-12 else None
     except Exception:
         return None
+
+
+def _toward_strip(edge, c):
+    """A point a little way from the middle of `edge` towards c (the middle of the strip)."""
+    m = edge.valueAt((edge.FirstParameter + edge.LastParameter) / 2.0)
+    return m + (c - m) * 0.5
+
+
+def _wedge(face, others):
+    """The piece a flat chamfer strip cut off: what lies between the strip, the surfaces of the two faces along its
+    long edges (continued past the strip) and the planes of the faces at its ends - however many those are (a mitred
+    end touches two). `others` = [(edge of the strip, neighbouring face)]. Built as an intersection of solids, so no
+    corner has to be computed by hand. Returns a solid or None if the strip is not of that kind."""
+    pf = _plane_of(face)
+    if len(others) < 4:
+        return None
+    others = sorted(others, key=lambda x: -x[0].Length)
+    (ea, fa), (eb, fb) = others[0], others[1]
+    ends = others[2:]
+    if ends[0][0].Length > 0.5 * eb.Length:
+        return None                                 # not a strip
+    width = face.Area / max(ea.Length, 1e-12)
+    c = face.CenterOfMass
+    size = face.BoundBox.DiagonalLength + 8.0 * width + 1e-3      # reach of the flat blocks: past both ends of the strip
+    thick = 6.0 * width + 1e-3                                    # thickness of a slab made from a curved face
+    # the corner the chamfer took away lies on the side of the strip where the side faces would meet: for two planes
+    # the nearest point of their line, else a point just off the strip on the side away from the neighbours' insides
+    pa, pb = _plane_of(fa), _plane_of(fb)
+    if pf is None or pa is None or pb is None:
+        _wedge.curved += 1
+    toward = None
+    try:
+        um, vm = face.Surface.parameter(c)
+        c = face.valueAt(um, vm)                    # on the strip also when it is not flat
+        out = face.normalAt(um, vm)
+    except Exception:
+        return None
+    if pf is not None and pa is not None and pb is not None:
+        line = _line_of(pa, pb)
+        if line is None:
+            return None
+        q = line[0] + line[1] * (c - line[0]).dot(line[1])
+        if (q - c).Length > 4.0 * width:
+            return None
+        toward = q
+    else:                                           # curved side: decide by the turn of the side faces at the strip
+        ma = ea.valueAt((ea.FirstParameter + ea.LastParameter) / 2.0)
+        mb = eb.valueAt((eb.FirstParameter + eb.LastParameter) / 2.0)
+        try:
+            ta = fa.normalAt(*fa.Surface.parameter(ma))
+            tb = fb.normalAt(*fb.Surface.parameter(mb))
+        except Exception:
+            return None
+        # convex corner: outward normals of the sides point away from each other across the strip -> corner is outside
+        convex = (ta + tb).dot(out) > 0
+        # only a hair off the strip: at a blunt corner the missing piece is much thinner than the strip is wide
+        toward = c + out * (0.02 * width if convex else -0.02 * width)
+    bb = face.BoundBox
+    pad = 3.0 * width
+    try:
+        w = Part.makeBox(bb.XLength + 2 * pad, bb.YLength + 2 * pad, bb.ZLength + 2 * pad,
+                         App.Vector(bb.XMin - pad, bb.YMin - pad, bb.ZMin - pad))
+        box_bb = w.BoundBox
+        own = _half_space(pf, toward, size) if pf is not None else _side_solid(face, ea, toward, size, thick)
+        if own is None:
+            return None
+        w = w.common(own)
+        # A curved side face is thickened along the OTHER side face, away from the corner: every point of the missing
+        # piece, moved back along that direction, meets the continued face. (Along its own normal the points near
+        # the other side would miss the end of the surface at a blunt corner, and the piece would come out too small.)
+        dirs = {}
+        try:
+            for key, (e1, g1, e2) in {"a": (eb, fb, ea), "b": (ea, fa, eb)}.items():
+                m1 = e1.valueAt((e1.FirstParameter + e1.LastParameter) / 2.0)
+                m2 = e2.valueAt((e2.FirstParameter + e2.LastParameter) / 2.0)
+                n1 = g1.normalAt(*g1.Surface.parameter(m1))
+                t1 = e1.tangentAt((e1.FirstParameter + e1.LastParameter) / 2.0)
+                dvec = n1.cross(t1)
+                if dvec.Length < 1e-9:
+                    return None
+                dvec.normalize()
+                if dvec.dot(m1 - m2) < 0:
+                    dvec = dvec * -1
+                dirs[key] = dvec
+        except Exception:
+            return None
+        for key, e, g in (("a", ea, fa), ("b", eb, fb)):
+            side = _side_solid(g, e, _toward_strip(e, c), size, thick, dirs[key])
+            if side is None:
+                return None
+            w = w.common(side)
+        for e, g in ends:
+            pe = _plane_of(g)
+            if pe is None:
+                # a curved face at the end (the chamfer around the end of a tooth with curved flanks): it is too small
+                # to be continued, so the end is closed with its tangent plane at the shared edge. Over the width of a
+                # chamfer that differs from the true continuation by microns; a tiny facet stays at that end.
+                try:
+                    m = e.valueAt((e.FirstParameter + e.LastParameter) / 2.0)
+                    ne = g.normalAt(*g.Surface.parameter(m))
+                    pe = (ne, ne.dot(m))
+                    _wedge.facets += 1
+                except Exception:
+                    return None
+            w = w.common(_half_space(pe, c, size))
+        if not w.Solids or len(w.Solids) != 1:
+            return None
+        w = w.Solids[0]
+        wb = w.BoundBox
+        tol = 1e-6
+        if not w.isValid() or w.Volume < 1e-12:
+            return None
+        # closed by the given faces only: it must not reach the box it was cut from (except where the strip does)
+        grown = (wb.XMin <= box_bb.XMin + tol or wb.XMax >= box_bb.XMax - tol or wb.YMin <= box_bb.YMin + tol
+                 or wb.YMax >= box_bb.YMax - tol or wb.ZMin <= box_bb.ZMin + tol or wb.ZMax >= box_bb.ZMax - tol)
+        if grown or w.Volume > 2.0 * width * width * ea.Length:
+            return None
+        return w
+    except Exception:
+        return None
+
+
+_wedge.facets = 0
+_wedge.curved = 0
 
 
 def _ring(i, faces, adj):
@@ -448,6 +571,7 @@ def fill_wedges(shape, face_ids, faces=None):
     adj = _adjacent(faces)
     add, cut, done = [], [], []
     rings = {}
+    _wedge.facets = _wedge.curved = 0
     for i in sorted(picked):
         f = faces[i]
         if type(f.Surface).__name__ == "Cone":      # chamfer on the rim of a hole or the end of a shaft
@@ -459,15 +583,15 @@ def fill_wedges(shape, face_ids, faces=None):
                     (cut if shape.isInside(probe, 1e-7, False) else add).append(solid)
                 done.append(i)
             continue
-        if type(f.Surface).__name__ != "Plane" or len(f.Edges) != 4:
-            continue
+        if type(f.Surface).__name__ in ("Cylinder", "Toroid", "Sphere") or not 4 <= len(f.Edges) <= 8:
+            continue                                # rounds are not chamfers; a strip has two long edges and its ends
         others = []
         for e in f.Edges:
             hit = [j for j in adj[i] if any(e.isSame(x) for x in faces[j].Edges)]
             if len(hit) != 1:
                 break
             others.append((e, faces[hit[0]], hit[0]))
-        if len(others) != 4:
+        if len(others) != len(f.Edges):
             continue
         short = sorted(others, key=lambda x: -x[0].Length)[2:]
         if any(j in picked for _, _, j in short):
@@ -490,11 +614,15 @@ def fill_wedges(shape, face_ids, faces=None):
             return None, []
         out = out.Solids[0] if len(out.Solids) == 1 else out
         want = shape.Volume + sum(w.Volume for w in add) - sum(w.Volume for w in cut)
-        if not out.isValid() or abs(out.Volume - want) > 1e-6 * max(abs(want), 1.0) + 1e-4:
+        if not out.isValid() or abs(out.Volume - want) > 1e-5 * max(abs(want), 1.0) + 1e-3:
             return None, []
         refined = out.copy().removeSplitter()
         if refined.isValid() and abs(refined.Volume - out.Volume) <= 1e-6 * max(out.Volume, 1.0):
             out = refined
+        # curved neighbours are not merged with the piece that continues them (a seam line stays along the old chamfer),
+        # and a tangent-plane end leaves a facet: allow for those, but not for anything else
+        if len(out.Faces) > len(faces) - len(done) + len(rings) + 2 * _wedge.facets + 3 * _wedge.curved:
+            return None, []         # pieces did not close cleanly against the neighbours (slivers left): not this way
         return out, done
     except Exception:
         return None, []
