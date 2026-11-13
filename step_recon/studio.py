@@ -11,6 +11,8 @@ import csv
 import json
 import math
 import os
+import subprocess
+import sys
 import queue
 import re
 import threading
@@ -202,6 +204,8 @@ class Studio:
         ref = analyze.load_shape(path)
         self._step(40, f"형상 읽음: 면 {len(ref.Faces)}개 · 바꿀 수 있는 후보 찾는 중")
         self.ref, self.base, self.ref_volume = ref, base, ref.Volume
+        self.ref_brep = os.path.join(self.dir, "_reference.brep")       # what a make job reads (same face order)
+        ref.exportBrep(self.ref_brep)
         self.cands = machined.scan(ref)
         self.selection, self.auto = [], False
         self.info = {"name": name, "base": base, "folder": self.dir, "faces": len(ref.Faces),
@@ -234,23 +238,18 @@ class Studio:
         t0 = time.time()
         ref, base, name = self.ref, self.base, self.info["name"]
         self._drop_doc()
-        cb = lambda f, stage, info: self._step(2 + 83 * f, machined.describe(stage, info))   # noqa: E731
-        if everything:
-            sess, report = machined.build(ref, cb)
-        else:
-            by = {it["id"]: it for it in self.cands["items"]}
-            pick = [by[i] for i in items]
-            sess, report = machined.build_selected(
-                ref, [it["key"] for it in pick if it["kind"] == "hole"],
-                [it["faces"][0] for it in pick if it["kind"] in ("fillet", "chamfer")],
-                [it["faces"][0] for it in pick if it["kind"] == "face"], cb)
-        self.selection, self.auto = ([] if everything else items), everything
+        by = {it["id"]: it for it in self.cands["items"]}
+        pick = [by[i] for i in items]
         fcstd = os.path.join(self.dir, base + ".FCStd")
-        self._step(86, "모델 저장 중 (스케치에 치수 넣는 중)")
-        saved = sess.save(fcstd)
-        self._step(93, "원본과 비교하는 중")
-        cmp_ = sess.compare()
-        self.doc, self.base, self.fcstd = sess.doc, base, fcstd
+        out = self._run_job({
+            "ref": self.ref_brep, "fcstd": fcstd, "everything": bool(everything),
+            "holes": [list(it["key"]) for it in pick if it["kind"] == "hole"],
+            "blends": [it["faces"][0] for it in pick if it["kind"] in ("fillet", "chamfer")],
+            "planes": [it["faces"][0] for it in pick if it["kind"] == "face"]})
+        report, saved, cmp_ = out["report"], {"sketches": out.get("sketches", {})}, out
+        self.selection, self.auto = ([] if everything else items), everything
+        self._step(94, "결과 불러오는 중")
+        self.doc, self.base, self.fcstd = App.openDocument(fcstd), base, fcstd
         self.ref_volume = ref.Volume
         self._step(95, "바꿀 수 있는 치수 정리 중")
         self._collect()
@@ -265,6 +264,46 @@ class Studio:
         self.bump()
         self._step(97, "3D 화면 데이터 만드는 중")
         return self.state(mesh=True)
+
+    def _run_job(self, job):
+        """Run make_job.py in a child process, follow its progress, return its final message."""
+        path = os.path.join(self.dir, "_make_job.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(job, f)
+        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        env = dict(os.environ, PYTHONIOENCODING="utf-8")
+        proc = subprocess.Popen([sys.executable, "-u", "-m", "step_recon.make_job", path], cwd=os.path.dirname(HERE),
+                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                creationflags=flags, env=env, text=True, encoding="utf-8", errors="replace")
+        cpu.follow(proc.pid)
+        self.job = proc
+        err = []
+        threading.Thread(target=lambda: err.append(proc.stderr.read()), daemon=True).start()
+        final = None
+        try:
+            for line in proc.stdout:        # waiting here does not hold the interpreter: requests keep being answered
+                try:
+                    msg = json.loads(line)
+                except ValueError:
+                    continue
+                if msg.get("done"):
+                    final = msg
+                elif "p" in msg:
+                    self._step(2 + 83 * float(msg["p"]), msg.get("t", ""))
+                elif msg.get("stage") == "save":
+                    self._step(86, msg.get("t", ""))
+                elif msg.get("stage") == "compare":
+                    self._step(92, msg.get("t", ""))
+            proc.wait()
+        finally:
+            cpu.forget(proc.pid)
+            self.job = None
+            if proc.poll() is None:
+                proc.kill()
+        if final is None:
+            tail = (err[0] if err else "").strip().splitlines()[-3:]
+            raise RuntimeError("making the dimensions failed: " + (" | ".join(tail) or f"exit code {proc.returncode}"))
+        return final
 
     def _drop_doc(self):
         """Forget the features (the part as read and its candidates stay)."""

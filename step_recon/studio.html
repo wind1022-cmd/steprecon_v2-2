@@ -203,6 +203,8 @@ td.bad{color:var(--bad);text-align:left;white-space:normal}
 .cpubtn b{font-weight:600;color:var(--ink);margin-left:4px;font-variant-numeric:tabular-nums}
 .ovbar{height:6px;border-radius:999px;background:var(--line);overflow:hidden;margin:14px 0 6px;display:none}
 .ovbar i{display:block;height:100%;width:0;background:var(--accent);transition:width .35s}
+.ovbar.busyline i{background:linear-gradient(90deg,var(--accent) 0 40%,color-mix(in srgb,var(--accent) 45%,transparent) 50%,var(--accent) 60% 100%);background-size:200% 100%;animation:busyline 1.4s linear infinite}
+@keyframes busyline{from{background-position:100% 0}to{background-position:-100% 0}}
 .ovtime{display:block;color:var(--faint);font-size:11.5px;font-variant-numeric:tabular-nums;min-height:1em}
 .ovcpu{margin-top:10px;border:0;background:none;color:var(--accent);font-size:12px;padding:2px;text-decoration:underline}
 .card span{display:block;max-width:420px;margin:2px auto 0;overflow-wrap:anywhere}
@@ -617,9 +619,13 @@ async function answerPlan(ok){ try{ await post("/api/chat/approve", {ok}); await
 /* ---------------------------------------------------------------- CPU setting and progress of an analysis */
 let cpuState = null, cpuTimer = 0, progTimer = 0;
 function fmtTime(s){ s = Math.round(s || 0); return s < 60 ? s + "초" : Math.floor(s / 60) + "분 " + (s % 60) + "초"; }
+let lastPct = -1, lastPctAt = 0;
 function showProgress(p){
+  if(p.pct !== lastPct){ lastPct = p.pct; lastPctAt = p.elapsed || 0; }
+  const still = (p.elapsed || 0) - lastPctAt > 8;
+  $("ovBar").classList.toggle("busyline", still);
   $("ovBar").style.display = "block"; $("ovBar").firstElementChild.style.width = Math.min(100, p.pct || 0) + "%";
-  if(p.text) $("ovSub").textContent = p.text; $("ovTime").textContent = Math.round(p.pct || 0) + "% · " + fmtTime(p.elapsed) + " 지남"; $("ovCpu").style.display = "inline-block";
+  if(p.text) $("ovSub").textContent = p.text; $("ovTime").textContent = Math.round(p.pct || 0) + "% · " + fmtTime(p.elapsed) + " 지남" + (still ? " · 이 단계는 한 번에 계산되어 진행률이 멈춰 보입니다 (계속 작업 중)" : ""); $("ovCpu").style.display = "inline-block";
 }
 function watchProgress(on){
   clearInterval(progTimer); if(!on) return;

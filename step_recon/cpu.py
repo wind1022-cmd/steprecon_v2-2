@@ -13,6 +13,7 @@ import os
 
 _low = False
 _cores = None
+children = set()        # processes started for heavy work (studio make jobs): they follow every change too
 
 
 def _count():
@@ -40,11 +41,32 @@ if os.name == "nt":
 
     _SYSTEM = [b for b in range(64) if _masks()[1] >> b & 1]     # the cores of this process's processor group
 
-    def _set_cores(n):
+    _k.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    _k.OpenProcess.restype = wintypes.HANDLE
+    _k.CloseHandle.argtypes = [wintypes.HANDLE]
+
+    def _mask(n):
         mask = 0
         for b in _SYSTEM[:n]:
             mask |= 1 << b
-        return bool(_k.SetProcessAffinityMask(_k.GetCurrentProcess(), mask))
+        return mask
+
+    def _set_cores(n):
+        return bool(_k.SetProcessAffinityMask(_k.GetCurrentProcess(), _mask(n)))
+
+    def _for_pid(pid, cores, low):
+        h = _k.OpenProcess(0x0200 | 0x1000, False, int(pid))     # SET_INFORMATION | QUERY_LIMITED_INFORMATION
+        if not h:
+            return False
+        try:
+            ok = True
+            if cores is not None:
+                ok &= bool(_k.SetProcessAffinityMask(h, _mask(cores)))
+            if low is not None:
+                ok &= bool(_k.SetPriorityClass(h, _BELOW_NORMAL if low else _NORMAL))
+            return ok
+        finally:
+            _k.CloseHandle(h)
 
     def _get_cores():
         return bin(_masks()[0]).count("1") or len(_SYSTEM)
@@ -74,6 +96,21 @@ elif hasattr(os, "sched_setaffinity"):
     def _get_cores():
         return len(os.sched_getaffinity(0))
 
+    def _for_pid(pid, cores, low):
+        ok = True
+        if cores is not None:
+            for tid in os.listdir(f"/proc/{pid}/task") if os.path.isdir(f"/proc/{pid}/task") else [str(pid)]:
+                try:
+                    os.sched_setaffinity(int(tid), set(_SYSTEM[:cores]))
+                except OSError:
+                    ok = False
+        if low:
+            try:
+                os.setpriority(os.PRIO_PROCESS, int(pid), 10)
+            except OSError:
+                ok = False
+        return ok
+
     def _set_low(low):
         try:
             now = os.getpriority(os.PRIO_PROCESS, 0)
@@ -100,6 +137,9 @@ else:
 
     def _get_cores():
         return _count()
+
+    def _for_pid(pid, cores, low):
+        return False
 
     def _set_low(low):
         try:
@@ -145,7 +185,19 @@ def apply(cores=None, low=None):
     if low is not None:
         if _set_low(bool(low)):
             _low = bool(low)
+    for pid in list(children):
+        _for_pid(pid, _cores if cores is not None else None, _low if low is not None else None)
     return state()
+
+
+def follow(pid):
+    """A child process that should obey the setting (now and on every later change)."""
+    children.add(pid)
+    _for_pid(pid, _cores if CAN_LIMIT and _cores else None, _low)
+
+
+def forget(pid):
+    children.discard(pid)
 
 
 def state():

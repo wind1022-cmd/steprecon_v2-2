@@ -131,7 +131,7 @@ pcts = [p["pct"] for p in act]
 report("progress can be read while dimensions are made", len(act) >= 3 and all(a <= b for a, b in zip(pcts, pcts[1:]))
        and act[0]["name"] == "plate.stp" and all(p["elapsed"] >= 0 for p in act), f"{len(act)} polls, {pcts[:1]} .. {pcts[-1:]}")
 texts = {p["text"] for p in act}
-known = [k for _, k in machined.STAGES.values()] + ["STEP 파일", "형상 읽음", "모델 저장", "원본과 비교", "치수 정리", "3D 화면"]
+known = [k for _, k in machined.STAGES.values()] + ["STEP 파일", "형상 읽음", "모델 저장", "원본과 비교", "치수 정리", "3D 화면", "준비", "결과 불러오는"]
 report("stage texts", len(texts) >= 2 and all(any(t.startswith(k) for k in known) for t in texts), " | ".join(sorted(texts))[:150])
 report("made fine, progress cleared", opened[0] == 200 and got and got[0][0] == 200 and got[0][1]["info"]["identical"] and call("/api/progress")[1] == {"active": False})
 
