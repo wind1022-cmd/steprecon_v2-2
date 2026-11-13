@@ -775,7 +775,7 @@ class Session:
                 return None
             if kind in ("Cylinder", "Toroid", "Sphere"):
                 return {"fillet": round(d / (1.0 / math.sin(t / 2) - 1.0), 2)}
-            if kind in ("Plane", "Cone"):
+            if True:        # plane, cone, or a ruled / spline strip along a curved edge: a chamfer if anything
                 legs = self._chamfer_legs(self.ref.Faces[info[0][1]], faces, mid) if len(faces) == 2 else None
                 if legs and abs(legs[0] - legs[1]) > max(1e-3, 0.02 * max(legs)):
                     return {"chamfer2": [round(legs[0], 3), round(legs[1], 3)]}

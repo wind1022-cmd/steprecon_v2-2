@@ -158,12 +158,12 @@ def find_blends(shape):
                     smooth.add(j)
             if len(smooth) >= 2:
                 groups.setdefault(("fillet", round(radius, 4)), []).append(i)
-        elif kind in ("Plane", "Cone"):
+        else:       # plane, cone, or the ruled / spline strip of a chamfer along a curved edge (gear flanks ...)
             edges = sorted(f.Edges, key=lambda e: -e.Length)
-            if len(edges) < 2 or (kind == "Plane" and len(f.Edges) != 4):
+            if len(edges) < 2 or (kind != "Cone" and len(f.Edges) != 4):
                 continue
             long_edges = edges[:2]
-            if kind == "Plane":
+            if kind != "Cone":
                 width = f.Area / max(long_edges[0].Length, 1e-9)
                 if width > 0.35 * long_edges[0].Length:
                     continue                                # not a narrow strip
@@ -789,6 +789,10 @@ def scan(ref):
                 it["rim_unknown"] = len(odd)
                 g = next(g for g in groups.values() if it["id"] in g["items"])
                 g["rim_unknown"] = g.get("rim_unknown", 0) + len(odd)
+    taken = {i for it in items for i in it["faces"]}
+    for i, f in enumerate(ref.Faces):       # every other face: cannot become a dimension, but can be removed
+        if i not in taken:
+            add({"id": f"f{i}", "kind": "other", "faces": [i], "size": round(f.Area, 3)})
     owner = [0] * len(ref.Faces)
     for k, it in enumerate(items, 1):
         for i in it["faces"]:
@@ -796,6 +800,75 @@ def scan(ref):
     order = {"hole": 0, "fillet": 1, "chamfer": 2}
     gl = sorted(groups.values(), key=lambda g: (order[g["kind"]], -g["size"] if g["kind"] == "hole" else g["size"]))
     return {"items": items, "groups": gl, "owner": owner}
+
+
+def _take_off(shape, faces):
+    """shape without these Face objects, or None if the kernel cannot close the gap cleanly."""
+    try:
+        out = shape.defeaturing(faces)
+    except Exception:
+        return None
+    if out.isNull() or not out.isValid() or len(out.Solids) != len(shape.Solids) or len(out.Faces) >= len(shape.Faces) \
+            or out.Volume <= 0:
+        return None
+    return out.Solids[0] if len(out.Solids) == 1 else out
+
+
+def remove_faces(shape, face_ids, progress=None):
+    """Remove faces from the part - fillets, chamfers, holes, small details - letting the neighbours close the gap.
+    All at once if the kernel can; otherwise connected patches, then single faces, in repeated passes (a face that
+    resists at first often goes once its neighbours are gone), keeping whatever works.
+    Returns (new shape, number of faces removed, number that could not be removed)."""
+    ids = sorted(set(int(i) for i in face_ids))
+    if not ids:
+        return shape, 0, 0
+    out = _take_off(shape, [shape.Faces[i] for i in ids])
+    if out is not None:
+        return out, len(ids), 0
+    nb = _neighbours(shape)
+    left, patches = set(ids), []
+    while left:                     # connected patches of the chosen faces
+        todo, patch = [left.pop()], []
+        while todo:
+            i = todo.pop()
+            patch.append(i)
+            for _, j in nb[i]:
+                if j in left:
+                    left.discard(j)
+                    todo.append(j)
+        patches.append(patch)
+    mark = {i: (shape.Faces[i].CenterOfMass, shape.Faces[i].Area) for i in ids}
+    cur, gone = shape, set()
+
+    def find(i):                    # the same face in the shape as it is now (numbers change with every removal)
+        c, a = mark[i]
+        return next((f for f in cur.Faces if abs(f.Area - a) <= 1e-6 * max(a, 1.0)
+                     and f.CenterOfMass.distanceToPoint(c) < 1e-5), None)
+
+    def attempt(group):
+        nonlocal cur
+        faces = [find(i) for i in group]
+        new = _take_off(cur, faces) if all(f is not None for f in faces) else None
+        if new is not None:
+            cur = new
+            gone.update(group)
+        return new is not None
+
+    for k, patch in enumerate(patches):
+        if progress:
+            progress(0.5 * k / len(patches), k + 1, len(patches))
+        if len(patch) < len(ids):
+            attempt(patch)
+    for rnd in range(4):            # single faces, again while a pass still gets somewhere
+        rest = [i for i in ids if i not in gone]
+        before = len(gone)
+        for k, i in enumerate(rest):
+            if progress:
+                progress(0.5 + 0.125 * (rnd + k / len(rest)), k + 1, len(rest))
+            attempt([i])
+        if len(gone) == before or len(gone) == len(ids):
+            break
+    return cur, len(gone), len(ids) - len(gone)
 
 
 def build_selected(ref, holes=(), blend_faces=(), planes=(), progress=None):

@@ -117,9 +117,12 @@ class Studio:
         self.rows = []
         self.worker = Worker()
         self.progress = {"active": False}     # how far the running analysis is (open)
+        self.job, self.cancelled = None, False
+        self.doe_job = None     # a parallel DOE: {"total", "done", "running", "stop", "workers"}
         self.ref = None         # the part as read
         self.cands = None       # what could become a dimension (machined.scan)
         self.selection = []     # candidate ids the features were made from
+        self.undo = []          # earlier states of the part, before faces were removed
         self.auto = False       # made with "everything" instead of a selection
         self.rev = 0            # grows whenever the solid on screen is out of date
         self.quiet = False      # no rev change while variants are being built
@@ -257,6 +260,11 @@ class Studio:
             "blends": [it["faces"][0] for it in pick if it["kind"] in ("fillet", "chamfer")],
             "planes": [it["faces"][0] for it in pick if it["kind"] == "face"]})
         report, saved, cmp_ = out["report"], {"sketches": out.get("sketches", {})}, out
+        if not report.get("features"):      # nothing could be made: stay with the part and its candidates
+            why = "필렛·모따기를 떼었다가 다시 붙였을 때 원본과 똑같아지지 않았습니다 (곡면에 닿은 모따기·필렛에서 흔합니다)" \
+                if any("fillets/chamfers" in s for s in report.get("skipped", [])) else \
+                "; ".join(report.get("skipped", []))[:200] or "인식한 형상을 다시 만들 수 없었습니다"
+            raise ValueError("고른 것을 치수로 만들지 못했습니다: " + why + ". 크기를 바꿀 수는 없지만 '없애기'는 해 볼 수 있습니다.")
         self.selection, self.auto = ([] if everything else items), everything
         self._step(94, "결과 불러오는 중")
         with self._timed("loading the result"):
@@ -298,7 +306,7 @@ class Studio:
                                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                 creationflags=flags, env=env, text=True, encoding="utf-8", errors="replace")
         cpu.follow(proc.pid)
-        self.job = proc
+        self.job, self.cancelled = proc, False
         err = []
         threading.Thread(target=lambda: err.append(proc.stderr.read()), daemon=True).start()
         final = None
@@ -322,10 +330,79 @@ class Studio:
             self.job = None
             if proc.poll() is None:
                 proc.kill()
+        if final is None and self.cancelled:
+            raise ValueError("중지했습니다")
         if final is None:
             tail = (err[0] if err else "").strip().splitlines()[-3:]
             raise RuntimeError("making the dimensions failed: " + (" | ".join(tail) or f"exit code {proc.returncode}"))
         return final
+
+    def remove(self, items):
+        """Take the picked faces off the part itself (fillets, chamfers, holes, any face): the part is changed, the
+        candidates are found again, a STEP of the simplified part is written. Dimensions made before are dropped."""
+        if self.ref is None:
+            raise ValueError("no part is open")
+        by = {it["id"]: it for it in self.cands["items"]}
+        unknown = [i for i in items if i not in by]
+        if unknown:
+            raise ValueError("unknown candidate: " + ", ".join(map(str, unknown[:5])))
+        faces = sorted({f for i in items for f in by[i]["faces"]})
+        if not faces:
+            raise ValueError("nothing picked")
+        self.progress = {"active": True, "pct": 0.0, "text": "준비 중", "started": time.time(), "name": self.info["name"]}
+        try:
+            n = len(self.undo) + 1
+            out_brep = os.path.join(self.dir, f"_simplified_{n}.brep")
+            step = f"{self.base}_simplified.step"
+            res = self._run_job({"remove": faces, "ref": self.ref_brep, "out": out_brep,
+                                 "step": os.path.join(self.dir, step)}, lambda f: 2 + 88 * f)
+            if not res["removed"]:
+                raise ValueError("이 면들은 없앨 수 없었습니다 (주변 면을 늘려서 빈자리를 메울 수 없는 형상입니다)")
+            self._step(92, "형상 불러오는 중")
+            self._drop_doc()
+            self.undo.append({"ref": self.ref, "brep": self.ref_brep, "cands": self.cands, "info": dict(self.info),
+                              "volume": self.ref_volume})
+            ref = Part.Shape()
+            ref.importBrep(out_brep)
+            if len(ref.Solids) == 1 and ref.ShapeType != "Solid":
+                ref = ref.Solids[0]
+            before = self.ref_volume
+            self.ref, self.ref_brep, self.ref_volume, self.cands = ref, out_brep, ref.Volume, res["cands"]
+            for it in self.cands["items"]:
+                if "key" in it:
+                    it["key"] = tuple(it["key"])
+            self.selection, self.auto = [], False
+            self.info = dict(self.info, faces=len(ref.Faces), built=False, simplified=step,
+                             removed_total=self.info.get("removed_total", 0) + res["removed"],
+                             last_removed={"removed": res["removed"], "failed": res["failed"],
+                                           "volume_pct": round((ref.Volume - before) / before * 100, 3) if before else 0.0})
+            self.aliases, self.highlight, self.plan = {}, 0, None
+            self.bump()
+            return self.state(mesh=True)
+        finally:
+            self.progress = {"active": False}
+
+    def undo_remove(self):
+        """Back to the part as it was before the last removal."""
+        if not self.undo:
+            raise ValueError("nothing to undo")
+        self._drop_doc()
+        u = self.undo.pop()
+        self.ref, self.ref_brep, self.cands, self.info, self.ref_volume = u["ref"], u["brep"], u["cands"], u["info"], u["volume"]
+        self.info["built"] = False
+        self.selection, self.auto = [], False
+        self.aliases, self.highlight, self.plan = {}, 0, None
+        self.bump()
+        return self.state(mesh=True)
+
+    def cancel_job(self):
+        """Stop the running job process (reading, making dimensions, removing): the part stays as it was."""
+        proc = getattr(self, "job", None)
+        if proc is None or proc.poll() is not None:
+            return {"cancelled": False}
+        self.cancelled = True
+        proc.kill()
+        return {"cancelled": True}
 
     def _drop_doc(self):
         """Forget the features (the part as read and its candidates stay)."""
@@ -341,6 +418,7 @@ class Studio:
         if self.ref is None:
             raise ValueError("no part is open")
         out = {"loaded": True, "mode": "pick", "rev": getattr(self, "rev", 0), "built": self.doc is not None,
+               "can_undo": bool(self.undo),
                "info": self.info, "items": [{k: v for k, v in it.items() if k != "key"} for it in self.cands["items"]],
                "groups": self.cands["groups"], "selection": self.selection, "measure": self._measure(self.ref),
                "reference_volume": round(self.ref_volume, 4)}
@@ -350,6 +428,7 @@ class Studio:
 
     def close(self):
         self.ref, self.cands, self.selection, self.auto = None, None, [], False
+        self.undo = []
         if self.doc is not None:
             try:
                 App.closeDocument(self.doc.Name)
@@ -543,7 +622,109 @@ class Studio:
             w.writeheader()
             w.writerows(self.rows)
 
+    def doe_workers(self, n):
+        """How many processes for n variants: one per allowed core, at most 12 (each loads the model: memory)."""
+        return max(1, min(int(n), cpu.state()["cores"], 12))
+
+    def doe_parallel(self, names, variants):
+        """Build the variants ([{"index", "values"}]) with several worker processes (doe_job.py); returns at once.
+        Follow with doe_status(); call doe_finish() when it says running = False."""
+        if self.doc is None:
+            raise ValueError("no dimensions yet")
+        if self.doe_job and self.doe_job["running"]:
+            raise ValueError("a DOE is already running")
+        self.doe_start(names)
+        todo = list(variants)
+        job = {"total": len(todo), "done": 0, "running": True, "stop": False, "workers": self.doe_workers(len(todo))}
+        self.doe_job = job
+        lock = threading.Lock()
+        run_dir, fcstd, names = self.run_dir, self.fcstd, list(names)
+
+        def record(row):
+            with lock:
+                self.rows.append(row)
+                job["done"] += 1
+                self._write_results()
+
+        def work():
+            proc = None
+            try:
+                proc = subprocess.Popen([sys.executable, "-u", "-m", "step_recon.doe_job", fcstd, run_dir],
+                                        cwd=os.path.dirname(HERE), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                        stderr=subprocess.DEVNULL, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                                        env=dict(os.environ, PYTHONIOENCODING="utf-8"), text=True, encoding="utf-8")
+                cpu.follow(proc.pid)
+                ready = proc.stdout.readline()
+                while ready and not ready.startswith('{"ready"'):
+                    ready = proc.stdout.readline()
+                while not job["stop"]:
+                    with lock:
+                        task = todo.pop(0) if todo else None
+                    if task is None:
+                        break
+                    row = None
+                    try:
+                        proc.stdin.write(json.dumps({"index": task["index"], "values": task.get("values", {}),
+                                                     "names": names}) + "\n")
+                        proc.stdin.flush()
+                        line = proc.stdout.readline()
+                        while line and not line.startswith("{"):
+                            line = proc.stdout.readline()
+                        row = json.loads(line) if line else None
+                    except (OSError, ValueError):
+                        row = None
+                    if row is None:         # the worker died on this variant (kernel crash): note it, stop this worker
+                        bad = {"run": task["index"], "ok": False, "file": "", "error": "the worker process stopped"}
+                        bad.update({k: float(task.get("values", {}).get(k, self.base_values.get(k, 0.0))) for k in names})
+                        record(bad)
+                        break
+                    record(row)
+            finally:
+                if proc is not None:
+                    cpu.forget(proc.pid)
+                    try:
+                        proc.stdin.close()
+                        proc.wait(timeout=5)
+                    except Exception:
+                        proc.kill()
+
+        def pool():
+            threads = [threading.Thread(target=work, daemon=True) for _ in range(job["workers"])]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+            if todo and not job["stop"]:        # every worker died: the rest could not be tried
+                for task in list(todo):
+                    bad = {"run": task["index"], "ok": False, "file": "", "error": "no worker process left"}
+                    bad.update({k: float(task.get("values", {}).get(k, self.base_values.get(k, 0.0))) for k in names})
+                    record(bad)
+                todo.clear()
+            job["running"] = False
+
+        threading.Thread(target=pool, daemon=True).start()
+        return {"folder": run_dir, "total": job["total"], "workers": job["workers"]}
+
+    def doe_status(self, start=0):
+        """Progress of the parallel DOE and the rows finished since row number `start` (in order of completion)."""
+        job = self.doe_job
+        if not job:
+            return {"running": False, "done": 0, "total": 0, "rows": [], "workers": 0}
+        rows = list(self.rows)
+        return {"running": job["running"], "done": job["done"], "total": job["total"], "workers": job["workers"],
+                "stopped": job["stop"], "rows": rows[int(start):]}
+
+    def doe_stop(self):
+        if self.doe_job:
+            self.doe_job["stop"] = True
+        return self.doe_status(len(self.rows))
+
     def doe_finish(self):
+        if self.doe_job and self.doe_job["running"]:
+            raise ValueError("the DOE is still running")
+        self.rows.sort(key=lambda r: r["run"])
+        if self.rows:
+            self._write_results()
         self.set_values({})         # back to the part's own values
         archive = os.path.join(self.run_dir, self.base + "_doe.zip")
         with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as z:
@@ -611,6 +792,8 @@ def make_handler(studio):
                     return self._send(200, cpu.state())
                 if url.path == "/api/pick":
                     return self._send(200, W(studio.pick_state, mesh=True))
+                if url.path == "/api/doe/status":
+                    return self._send(200, studio.doe_status(int(parse_qs(url.query).get("from", ["0"])[0])))
                 if url.path == "/api/state":
                     if studio.progress.get("active"):       # do not wait minutes for the analysis to end
                         return self._send(200, {"loaded": False, "analysing": True, "rev": getattr(studio, "rev", 0)})
@@ -689,6 +872,17 @@ def make_handler(studio):
                         return self._send(400, {"error": "cores must be a number"})
                     low = None if b.get("low") is None else bool(b["low"])
                     return self._send(200, studio.set_cpu(cores, low))
+                if url.path in ("/api/remove", "/api/unremove"):
+                    b = self._json()
+                    try:
+                        if url.path == "/api/unremove":
+                            return self._send(200, W(studio.undo_remove))
+                        return self._send(200, W(studio.remove, b.get("items") or []))
+                    except ValueError as e:
+                        return self._send(400, {"error": str(e)})
+                if url.path == "/api/cancel":
+                    self._body()
+                    return self._send(200, studio.cancel_job())
                 if url.path == "/api/make":
                     b = self._json()
                     try:
@@ -704,6 +898,15 @@ def make_handler(studio):
                 if url.path == "/api/doe/variant":
                     b = self._json()
                     return self._send(200, W(studio.doe_variant, int(b["index"]), b.get("values", {})))
+                if url.path == "/api/doe/run":
+                    b = self._json()
+                    try:
+                        return self._send(200, studio.doe_parallel(b.get("names", []), b.get("variants", [])))
+                    except ValueError as e:
+                        return self._send(400, {"error": str(e)})
+                if url.path == "/api/doe/stop":
+                    self._body()
+                    return self._send(200, studio.doe_stop())
                 if url.path == "/api/doe/finish":
                     self._body()
                     out = W(studio.doe_finish)

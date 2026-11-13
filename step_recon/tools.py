@@ -46,6 +46,14 @@ TOOLS = [
          "items": {"type": "array", "items": {"type": "string"},
                    "description": "Single candidates: a hole (h3), one fillet/chamfer face (b17), a flat face (p20)"},
          "everything": {"type": "boolean", "description": "All candidates, flat faces chosen automatically (slow)"}}}},
+    {"name": "remove_features",
+     "description": "Remove chosen candidates from the part itself (fillets, chamfers, holes are deleted and the "
+                    "neighbouring faces close the gap) - for simplifying a part, e.g. before meshing, or when a "
+                    "fillet/chamfer cannot be made into a dimension. The part changes, earlier dimensions are "
+                    "dropped, candidates get new ids, a STEP of the simplified part is written. Ask the user first.",
+     "input_schema": {"type": "object", "properties": {
+         "groups": {"type": "array", "items": {"type": "string"}, "description": "Group ids from the candidate list"},
+         "items": {"type": "array", "items": {"type": "string"}, "description": "Single candidate ids"}}}},
     {"name": "get_part",
      "description": "Describe the open part: size, volume, and every feature with its number, place and parameters "
                     "(exact parameter names and current values). Call this before changing anything.",
@@ -147,6 +155,8 @@ def _candidates(st):
                       if g.get("rim_unknown") else "") + "   items " + ", ".join(g["items"][:8])
                    + (" ..." if n > 8 else ""))
     planes = [it for it in c["items"] if it["kind"] == "face"]
+    if st.info.get("removed_total"):
+        out.append(f"({st.info['removed_total']} faces were removed from the original part so far.)")
     if planes:
         out.append(f"Movable flat faces ({len(planes)}; one item each, largest first):")
         for it in sorted(planes, key=lambda x: -x["size"])[:25]:
@@ -208,7 +218,7 @@ def open_part(st, path):
     st.worker.busy = "open"
     st.open(path)
     i = st.info
-    st.note(f"파일 열기: {i['name']} (후보 {len(st.cands['items'])}개, {i['scan_seconds']}초)")
+    st.note(f"파일 열기: {i['name']} (후보 {sum(1 for it in st.cands['items'] if it['kind'] != 'other')}개, {i['scan_seconds']}초)")
     return _candidates(st) + "\nNothing is built yet. Ask the user what to vary if unclear, then call make_dimensions."
 
 
@@ -236,6 +246,35 @@ def make_dimensions(st, groups=None, items=None, everything=False):
     for w in i.get("warnings", []):
         extra += "\nWARNING (tell the user): " + w["text"]
     return get_part(st) + extra
+
+
+def remove_features(st, groups=None, items=None):
+    _need(st, dims=False)
+    by_g = {g["id"]: g for g in st.cands["groups"]}
+    by_i = {it["id"]: it for it in st.cands["items"]}
+    pick = []
+    for g in groups or []:
+        if g not in by_g:
+            raise ToolError(f"There is no group {g!r}; groups are " + ", ".join(by_g) + ".")
+        pick += by_g[g]["items"]
+    for i in items or []:
+        if i not in by_i:
+            raise ToolError(f"There is no candidate {i!r}.")
+        if by_i[i]["kind"] == "face":
+            raise ToolError(f"{i} is a flat face to move, not something to remove.")
+        pick.append(i)
+    if not pick:
+        raise ToolError("Choose groups and/or items to remove.")
+    st.worker.busy = "remove"
+    try:
+        st.remove(list(dict.fromkeys(pick)))
+    except ValueError as e:
+        raise ToolError(f"Nothing was removed: {e}")
+    r = st.info["last_removed"]
+    st.note(f"형상에서 없앰: 면 {r['removed']}개 (부피 {r['volume_pct']:+g}%)")
+    return (f"Removed {r['removed']} faces" + (f", {r['failed']} could not be removed" if r["failed"] else "")
+            + f"; volume changed by {r['volume_pct']:+g}%. Simplified part saved as "
+            + os.path.join(st.dir, st.info["simplified"]) + ".\nThe candidates have new ids now:\n" + _candidates(st))
 
 
 def get_part(st, category=None, feature=None, density_g_cm3=None, candidates=False):
@@ -492,18 +531,20 @@ def run_doe(st, max_seconds=45):
         return "This plan has already been run.\n" + _summary(st)
     t0 = time.time()
     budget = max(5.0, float(max_seconds or 45))
+    total = len(plan["rows"])
     if not plan["started"]:
         plan["before"] = st.changed()     # also the present values of the factors themselves
-        st.doe_start(plan["names"])
+        info = st.doe_parallel(plan["names"], [
+            {"index": k + 1, "values": {**plan["fixed"], **dict(zip(plan["names"], row))}}
+            for k, row in enumerate(plan["rows"])])
         plan["started"] = True
-        st.note(f"DOE 실행 시작: {len(plan['rows'])}개 조합")
-    total = len(plan["rows"])
-    while plan["next"] < total and time.time() - t0 < budget:
-        k = plan["next"]
-        st.worker.busy = f"DOE {k + 1}/{total}"
-        st.doe_variant(k + 1, {**plan["fixed"], **dict(zip(plan["names"], plan["rows"][k]))})
-        plan["next"] = k + 1
-    if plan["next"] < total:
+        st.note(f"DOE 실행 시작: {total}개 조합 · 프로세스 {info['workers']}개로 동시에")
+    job = st.doe_job            # the variants are built by worker processes; here we only wait for them
+    while job["running"] and time.time() - t0 < budget:
+        st.worker.busy = f"DOE {job['done']}/{total}"
+        time.sleep(0.2)
+    plan["next"] = job["done"]
+    if job["running"]:
         st.note(f"DOE 진행: {plan['next']} / {total}")
         return (f"{plan['next']} of {total} runs done in this call's time; {total - plan['next']} remain. "
                 "Call run_doe again to continue.")
@@ -569,7 +610,7 @@ def export_step(st, file_name=None):
     return f"Saved {path}\nwith " + (", ".join(f"{k} = {g(v)}" for k, v in ch.items()) if ch else "the original values") + "."
 
 
-_FUNCS = {f.__name__: f for f in (open_part, make_dimensions, get_part, set_values, reset_values, find_limits, plan_doe, run_doe,
+_FUNCS = {f.__name__: f for f in (open_part, make_dimensions, remove_features, get_part, set_values, reset_values, find_limits, plan_doe, run_doe,
                                   doe_results, show_feature, label_features, export_step)}
 
 

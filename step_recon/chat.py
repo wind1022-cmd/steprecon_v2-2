@@ -142,6 +142,10 @@ class Chat:
             if bad or plan["finished"]:
                 return text, bad
             if self._stop:
+                st.doe_stop()
+                while st.doe_job and st.doe_job["running"]:
+                    time.sleep(0.2)
+                text, bad = st.worker.call(tools.call, st, "run_doe", {"max_seconds": 5})
                 return text + "\nThe user pressed stop; the remaining runs were not built.", False
 
     def _trim(self):

@@ -34,6 +34,22 @@ def main(path):
     import Part
     from step_recon import analyze, machined
 
+    if job.get("remove") is not None:
+        ref = Part.Shape()
+        ref.importBrep(job["ref"])
+        if len(ref.Solids) == 1 and ref.ShapeType != "Solid":
+            ref = ref.Solids[0]
+        say(p=0.0, t=f"면 {len(job['remove'])}개 없애는 중")
+        new, done, failed = machined.remove_faces(ref, job["remove"], lambda f, i, n: say(
+            p=0.05 + 0.8 * f, t=f"한꺼번에는 안 되어 부분별로 없애는 중 {i}/{n}"))
+        if done:
+            new.exportBrep(job["out"])
+            new.exportStep(job["step"])
+            say(p=0.9, t="바꿀 수 있는 후보 다시 찾는 중")
+        say(done=True, removed=done, failed=failed, faces=len(new.Faces), volume=new.Volume,
+            cands=machined.scan(new) if done else None)
+        return
+
     if job.get("scan"):
         say(p=0.0, t="STEP 파일 읽는 중")
         ref = analyze.load_shape(job["scan"])

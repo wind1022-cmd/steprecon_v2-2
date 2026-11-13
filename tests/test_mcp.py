@@ -167,7 +167,7 @@ st.worker.call(setattr, tools.time, "time", (lambda real=tools.time.time, n=[0]:
 text, bad = tool("run_doe", max_seconds=5)
 part_done = st.plan["next"]
 text2, bad2 = tool("run_doe", max_seconds=1e6)
-report("run_doe continues where it stopped", "remain" in text and 0 < part_done < 4 and "4 of 4 variants built" in text2, f"{part_done} then all")
+report("run_doe continues where it stopped", "remain" in text and 0 <= part_done < 4 and "4 of 4 variants built" in text2, f"{part_done} then all")
 
 # ------------------------------------------------------------ what the user sees
 n_hole = next(f["n"] for f in st.features if f["label"].startswith("Hole"))

@@ -130,7 +130,7 @@ roles = [m["role"] for m in c["items"]]
 report("request -> tools -> answer", code == 200 and roles == ["user", "tool", "ai"] and "치수 변경" in c["items"][1]["text"]
        and c["items"][2]["text"].startswith("지름을") and st.worker.call(st.changed) == {"Hole_D8_x2.Diameter1": 10.0}, str(roles))
 first = seen[0]["body"]
-report("what the model was sent", seen[0]["auth"] == "Bearer secret-token" and first["model"] == "test-model" and len(first["tools"]) == 12
+report("what the model was sent", seen[0]["auth"] == "Bearer secret-token" and first["model"] == "test-model" and len(first["tools"]) == 13
        and "STEP Studio" in first["system"] and first["messages"][0]["content"].startswith("[Part plate.stp is open, 8 features. The user has feature #"
                                                                                            + str(n_hole) + " selected (Hole_D8_x2; parameters: Hole_D8_x2.Diameter1")
        and first["messages"][0]["content"].endswith("\n이 구멍을 10으로 키워줘"))
