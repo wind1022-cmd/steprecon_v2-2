@@ -15,7 +15,8 @@ Nothing is taken on trust: every step is checked against the reference, and what
 left in the blank untouched. So the result always equals the reference; only the number of features varies.
 
 Recognised: complete concave cylinders (through or blind, any direction, each step of a counterbore);
-constant-radius fillets (straight, around circular edges, with their corner patches); equal-leg chamfers;
+constant-radius fillets (straight, around circular edges, with their corner patches); chamfers (equal legs or two
+different distances);
 flat faces as movable faces (thickness, height): those with straight surroundings, and machined lands
 bounded by chamfers, fillets or drafted walls that fall away from them.
 Left in the blank: everything else (drill points, slots, threads, variable fillets, freeform shapes, drafts)."""
@@ -126,7 +127,8 @@ def find_blends(shape):
 
     fillet : a partial cylinder / torus / sphere that runs smoothly (tangent) into at least two different
              neighbours which are not the same surface (that would be the other half of a hole or shaft);
-    chamfer: a narrow plane or a cone that meets two neighbours along its long edges at the same sharp angle.
+    chamfer: a narrow plane or a cone that meets two neighbours along its long edges at sharp angles (the same
+             angle for an equal-leg chamfer, different ones for a chamfer with two distances).
     This is only a first guess - build() keeps a group only if putting it back reproduces the reference."""
     faces = shape.Faces
     nb = _neighbours(shape)
@@ -173,8 +175,7 @@ def find_blends(shape):
                 n1, n2 = _normal_at(f, p), _normal_at(faces[j], p)
                 if n1 is not None and n2 is not None:
                     angles.append(n1.getAngle(n2))
-            if len(angles) == 2 and abs(angles[0] - angles[1]) < math.radians(1.0) \
-                    and math.radians(20) < angles[0] < math.radians(70):
+            if len(angles) == 2 and all(math.radians(10) < a < math.radians(80) for a in angles):
                 groups.setdefault(("chamfer",), []).append(i)
     return groups
 
@@ -331,16 +332,27 @@ def _dress(sess, report):
         left = len({str(e["suggest"]) for e in todo})
         _tell("dress", 0.6 + 0.4 * k / (k + left), i=k + 1, n=k + left)
         # largest first: a big fillet has to exist before a small one can run over its end
-        first = max((e["suggest"] for e in todo), key=lambda s: list(s.values())[0])
+        first = max((e["suggest"] for e in todo), key=lambda s: max(list(s.values())[0]) if isinstance(
+            list(s.values())[0], list) else list(s.values())[0])
         ids = [e["edge"] for e in todo if e["suggest"] == first]
         before = sess.compare()["xor_pct"]
         kind, size = list(first.items())[0]
-        r = sess.fillet(ids, size) if kind == "fillet" else sess.chamfer(ids, size)
+        if kind == "chamfer2":      # which leg goes on which face depends on the edge's direction: try both
+            tried = []
+            for flip in (False, True):
+                r = sess.chamfer2(ids, size[0], size[1], flip)
+                if r.get("ok"):
+                    tried.append((sess.compare()["xor_pct"], flip))
+                    sess.undo()
+            good = [t for t in tried if t[0] < before - 1e-9]
+            r = sess.chamfer2(ids, size[0], size[1], min(good)[1]) if good else {"ok": False}
+        else:
+            r = sess.fillet(ids, size) if kind == "fillet" else sess.chamfer(ids, size)
         if r.get("ok") and sess.compare()["xor_pct"] < before - 1e-9:
             feat = sess.doc.getObject(r["feature"])
-            feat.Label = (f"Fillet_R{size:g}" if kind == "fillet" else f"Chamfer_{size:g}") + \
-                (f"_x{len(ids)}" if len(ids) > 1 else "")
-            report[kind + "s_made"] += len(ids)
+            feat.Label = (f"Fillet_R{size:g}" if kind == "fillet" else f"Chamfer_{size:g}" if kind == "chamfer"
+                          else f"Chamfer_{max(size):g}x{min(size):g}") + (f"_x{len(ids)}" if len(ids) > 1 else "")
+            report[("chamfer" if kind == "chamfer2" else kind) + "s_made"] += len(ids)
             report["features"] += 1
         else:
             if r.get("ok"):
@@ -681,24 +693,38 @@ def _build(ref, blends=None, only_holes=None, plane_faces=None):
 
 # ------------------------------------------------------------------ pick what to treat
 def _chamfer_size(shape, i, nb):
-    """Leg length of an equal-leg chamfer face: its width over 2 sin(angle to the neighbours along its long edges)."""
+    """Leg lengths (larger, smaller) of a chamfer face. In the triangle corner - leg 1 - leg 2 the chamfer is the side
+    of width w, its angles at the two legs are the angles a1, a2 between the chamfer and the neighbours, so
+    leg on neighbour 1 = w sin(a2) / sin(a1 + a2) and the other way round."""
     f = shape.Faces[i]
     long_edges = sorted(f.Edges, key=lambda e: -e.Length)[:2]
     angles = []
-    for e, j in nb[i]:
-        if any(e.isSame(x) for x in long_edges):
-            p = _edge_mid(e)
-            n1, n2 = _normal_at(f, p), _normal_at(shape.Faces[j], p)
-            if n1 is not None and n2 is not None:
-                angles.append(n1.getAngle(n2))
-    a = sum(angles) / len(angles) if angles else math.pi / 4
+    for x in long_edges:
+        for e, j in nb[i]:
+            if e.isSame(x):
+                p = _edge_mid(e)
+                n1, n2 = _normal_at(f, p), _normal_at(shape.Faces[j], p)
+                if n1 is not None and n2 is not None:
+                    angles.append(n1.getAngle(n2))
+                break
     width = f.Area / max(1e-12, sum(e.Length for e in long_edges) / max(1, len(long_edges)))
-    return width / (2 * math.sin(a)) if math.sin(a) > 1e-6 else width
+    if len(angles) != 2 or math.sin(sum(angles)) < 1e-6:
+        return width / math.sqrt(2), width / math.sqrt(2)
+    a1, a2 = angles
+    legs = (width * math.sin(a2) / math.sin(a1 + a2), width * math.sin(a1) / math.sin(a1 + a2))
+    return max(legs), min(legs)
 
 
 def _side(n):
     k = max(range(3), key=lambda i: abs(n[i]))
     return (("+" if n[k] > 0 else "-") + "XYZ"[k]) if abs(n[k]) > 0.999 else ""
+
+
+def _odd_rim(shape, nb, hole_faces, known):
+    """Faces touching a hole that are neither flat, nor another cylinder, nor a recognised fillet / chamfer: a rim
+    shape the hole's diameter cannot carry along (it stays as in the file)."""
+    return {j for i in hole_faces for _, j in nb[i]
+            if j not in known and j not in hole_faces and type(shape.Faces[j].Surface).__name__ not in ("Plane", "Cylinder")}
 
 
 def scan(ref):
@@ -717,6 +743,8 @@ def scan(ref):
         if gkey is not None:
             g = groups.setdefault(gkey, {"id": "g%d" % (len(groups) + 1), "kind": item["kind"], "size": item["size"],
                                          "items": []})
+            if item.get("size2"):
+                g["size2"] = item["size2"]
             g["items"].append(item["id"])
             item["group"] = g["id"]
 
@@ -730,11 +758,17 @@ def scan(ref):
     for key, ids in sorted(find_blends(ref).items(), key=lambda kv: str(kv[0])):
         for i in ids:
             blend_faces.add(i)
+            item = {"id": f"b{i}", "kind": key[0], "faces": [i]}
             if key[0] == "fillet":
-                size = round(key[1], 4)
+                item["size"] = round(key[1], 4)
             else:
-                size = round(_chamfer_size(ref, i, nb), 3)
-            add({"id": f"b{i}", "kind": key[0], "faces": [i], "size": size}, (key[0], size))
+                big, small = _chamfer_size(ref, i, nb)
+                item["size"] = round(big, 3)
+                if big - small > max(1e-3, 0.02 * big):       # two different distances
+                    item["size2"] = round(small, 3)
+                else:
+                    item["size"] = round((big + small) / 2, 3)
+            add(item, (key[0], item["size"], item.get("size2")))
     for i, f in enumerate(ref.Faces):
         if i in blend_faces or type(f.Surface).__name__ != "Plane" or not nb[i]:
             continue
@@ -748,6 +782,13 @@ def scan(ref):
             c = f.CenterOfMass
             add({"id": f"p{i}", "kind": "face", "faces": [i], "size": round(f.Area, 3), "side": _side(n),
                  "surround": kind, "at": [round(c.x, 3), round(c.y, 3), round(c.z, 3)]})
+    for it in items:
+        if it["kind"] == "hole":
+            odd = _odd_rim(ref, nb, it["faces"], blend_faces)
+            if odd:
+                it["rim_unknown"] = len(odd)
+                g = next(g for g in groups.values() if it["id"] in g["items"])
+                g["rim_unknown"] = g.get("rim_unknown", 0) + len(odd)
     owner = [0] * len(ref.Faces)
     for k, it in enumerate(items, 1):
         for i in it["faces"]:
@@ -771,11 +812,17 @@ def build_selected(ref, holes=(), blend_faces=(), planes=(), progress=None):
         chosen = set(blend_faces)
         added = []
         holes = {tuple(k) for k in holes}
+        warnings = []
         if holes:
             nb = _neighbours(ref)
             known = {i for ids in found.values() for i in ids}
             for h in find_holes(ref):
                 if _line_key(h) in holes:
+                    odd = _odd_rim(ref, nb, h["faces"], known)
+                    if odd:
+                        warnings.append({"hole": round(2 * h["radius"], 4), "faces": len(odd),
+                                         "text": f"hole D{2 * h['radius']:g}: {len(odd)} face(s) at its rim are not "
+                                                 "recognised and stay as in the file - they do not follow its diameter"})
                     for fi in h["faces"]:
                         for _, j in nb[fi]:
                             if j in known and j not in chosen:
@@ -785,6 +832,11 @@ def build_selected(ref, holes=(), blend_faces=(), planes=(), progress=None):
         blends = {k: v for k, v in blends.items() if v}
         sess, report = _build(ref, blends, holes, sorted(set(planes)))
         report["auto_added"] = sorted(added)
+        refused = [s for s in report["skipped"] if "fillets/chamfers" in s]
+        if added and refused:
+            warnings.append({"hole": None, "faces": 0, "text": "some fillets/chamfers at the rim of a chosen hole could "
+                                                               "not be rebuilt exactly and stay as in the file"})
+        report["warnings"] = warnings
         return sess, report
     finally:
         _progress, _try = None, {}

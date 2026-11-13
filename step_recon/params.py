@@ -12,7 +12,7 @@ FEATURE_PROPS = {
     "PartDesign::Pad": ("Length",),
     "PartDesign::Pocket": ("Length",),
     "PartDesign::Fillet": ("Radius",),
-    "PartDesign::Chamfer": ("Size",),
+    "PartDesign::Chamfer": ("Size", "Size2"),
     "PartDesign::Hole": ("Depth",),
     "PartDesign::Revolution": ("Angle",),
     "PartDesign::Groove": ("Angle",),
@@ -70,6 +70,8 @@ def collect(doc):
             label = _clean(o.Label)
             for prop in FEATURE_PROPS[t]:
                 if not hasattr(o, prop):
+                    continue
+                if prop == "Size2" and str(getattr(o, "ChamferType", "")) != "Two distances":
                     continue
                 if t == "PartDesign::Pocket" and str(o.Type) not in ("Length", "0"):
                     continue        # through-all pockets have no depth to vary

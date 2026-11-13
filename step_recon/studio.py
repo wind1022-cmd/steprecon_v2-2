@@ -261,7 +261,7 @@ class Studio:
                      "counts": {"holes": report["holes_made"], "fillets": report["fillets_made"],
                                 "chamfers": report["chamfers_made"], "faces": report.get("faces_made", 0)},
                      "sketches": saved.get("sketches", {}), "built": True, "auto": everything,
-                     "auto_added": len(report.get("auto_added", []))}
+                     "auto_added": len(report.get("auto_added", [])), "warnings": report.get("warnings", [])}
         self.bump()
         self._step(97, "3D 화면 데이터 만드는 중")
         return self.state(mesh=True)

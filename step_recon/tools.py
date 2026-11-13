@@ -138,10 +138,13 @@ def _candidates(st):
     out = [f"Candidates of {st.info['name']} ({len(st.ref.Faces)} faces). Groups (equal size together):"]
     for g in c["groups"]:
         n = len(g["items"])
-        size = f"D{g['size']:g}" if g["kind"] == "hole" else f"R{g['size']:g}" if g["kind"] == "fillet" else f"{g['size']:g} mm"
+        size = f"D{g['size']:g}" if g["kind"] == "hole" else f"R{g['size']:g}" if g["kind"] == "fillet" else \
+            (f"{g['size']:g} x {g['size2']:g} mm (two distances)" if g.get("size2") else f"{g['size']:g} mm")
         made = sum(1 for i in g["items"] if i in chosen)
         out.append(f"  {g['id']}: {g['kind']} {size}, {n} {'holes' if g['kind'] == 'hole' else 'faces'}"
-                   + (f"  [dimension made for {made}]" if made else "") + "   items " + ", ".join(g["items"][:8])
+                   + (f"  [dimension made for {made}]" if made else "")
+                   + (f"  [WARNING: {g['rim_unknown']} unrecognised rim face(s) will not follow the diameter]"
+                      if g.get("rim_unknown") else "") + "   items " + ", ".join(g["items"][:8])
                    + (" ..." if n > 8 else ""))
     planes = [it for it in c["items"] if it["kind"] == "face"]
     if planes:
@@ -230,6 +233,8 @@ def make_dimensions(st, groups=None, items=None, everything=False):
     st.note(f"치수 만들기: {'전부 자동' if everything else f'후보 {len(set(pick))}개'} → 피처 {len(st.features)}개 ({i['seconds']}초)")
     extra = f"\nAlso made, because they sit on the rim of a chosen hole: {i['auto_added']} fillet/chamfer faces." \
         if i.get("auto_added") else ""
+    for w in i.get("warnings", []):
+        extra += "\nWARNING (tell the user): " + w["text"]
     return get_part(st) + extra
 
 

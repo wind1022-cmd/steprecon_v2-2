@@ -741,6 +741,17 @@ class Session:
     def chamfer(self, edges, size):
         return self._dress("Chamfer", edges, size)
 
+    def chamfer2(self, edges, size, size2, flip=False):
+        """Chamfer with two distances; flip swaps which face gets which."""
+        base = self._tip_obj()
+        if base is None:
+            return {"ok": False, "error": "no solid yet"}
+        feat = self.body.newObject("PartDesign::Chamfer", "Chamfer")
+        feat.Base = (base, [f"Edge{int(i)}" for i in edges])
+        feat.ChamferType = "Two distances"
+        feat.Size, feat.Size2, feat.FlipDirection = float(size), float(size2), bool(flip)
+        return self._finish(feat, [feat.Name], f"chamfer {size} x {size2} flip={flip} edges={list(edges)}")
+
     def _dress_hint(self, tip, e, mid):
         """For a sharp edge of the current solid that the reference does not have: is the reference rounded or
         bevelled there, and by how much? Returns {"fillet": r} / {"chamfer": size} or None.
@@ -765,10 +776,33 @@ class Session:
             if kind in ("Cylinder", "Toroid", "Sphere"):
                 return {"fillet": round(d / (1.0 / math.sin(t / 2) - 1.0), 2)}
             if kind in ("Plane", "Cone"):
+                legs = self._chamfer_legs(self.ref.Faces[info[0][1]], faces, mid) if len(faces) == 2 else None
+                if legs and abs(legs[0] - legs[1]) > max(1e-3, 0.02 * max(legs)):
+                    return {"chamfer2": [round(legs[0], 3), round(legs[1], 3)]}
                 return {"chamfer": round(d / math.cos(t / 2), 2)}
         except Exception:
             pass
         return None
+
+    @staticmethod
+    def _chamfer_legs(cf, faces, mid):
+        """Distances from the sharp corner (point mid) to where the reference's chamfer face cf meets each of the
+        two faces of the corner: [on faces[0], on faces[1]], or None."""
+        try:
+            long_edges = sorted(cf.Edges, key=lambda e: -e.Length)[:2]
+            if len(long_edges) != 2:
+                return None
+            legs = [None, None]
+            for e in long_edges:
+                p = e.valueAt((e.FirstParameter + e.LastParameter) / 2.0)
+                on = [f.distToShape(Part.Vertex(p))[0] for f in faces]
+                k = 0 if on[0] < on[1] else 1
+                if min(on) > 1e-4 or legs[k] is not None:
+                    return None
+                legs[k] = e.distToShape(Part.Vertex(mid))[0]
+            return legs
+        except Exception:
+            return None
 
     def list_edges(self, only_type=None, min_length=0.0, only_missing=False):
         """1-based edge indices of the current tip shape (matches 'EdgeN' naming).

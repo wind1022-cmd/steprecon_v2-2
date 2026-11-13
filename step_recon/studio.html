@@ -236,6 +236,7 @@ td.bad{color:var(--bad);text-align:left;white-space:normal}
 .psec{margin:12px 2px 6px;font-size:12px;color:var(--mut);display:flex;align-items:baseline;gap:6px;flex-wrap:wrap}
 .psec b{color:var(--ink);font-size:12.5px}
 .linkbtn{border:0;background:none;color:var(--accent);font-size:12px;padding:4px 2px;text-decoration:underline}
+.grp small.warnline{display:block;color:var(--warn);margin-top:2px}
 .pickhelp{color:var(--mut);font-size:12px;padding:10px 4px 2px;line-height:1.5}
 .pickhelp kbd{font:inherit;font-size:11px;border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;padding:0 4px;background:var(--panel2)}
 </style>
@@ -350,14 +351,14 @@ async function api(path, opt){
   if(!r.ok || j.error) throw new Error(j.error || ("HTTP " + r.status)); return j;
 }
 const post = (path, body) => api(path, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body || {})});
-function pname(short){ const m = short.match(/^([A-Za-z]+?)(\d*)$/); if(!m) return short; const base = PNAME[m[1]] || m[1]; return m[2] && m[2] !== "1" ? base + " " + m[2] : base; }
+function pname(short){ if(short === "Size2") return "두 번째 길이"; const m = short.match(/^([A-Za-z]+?)(\d*)$/); if(!m) return short; const base = PNAME[m[1]] || m[1]; return m[2] && m[2] !== "1" ? base + " " + m[2] : base; }
 function esc(s){ return String(s).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c])); }
 function ftitle(f){ return f.alias || fauto(f); }
 function fauto(f){
   const p = f.params, get = k => p.find(x => x.short.startsWith(k));
   if(f.category === "hole"){ const d = get("Diameter"); return "구멍" + (d ? " Ø" + fmt(d.base) : "") + (f.count > 1 ? " ×" + f.count : ""); }
   if(f.category === "fillet"){ const r = get("Radius"); return "필렛" + (r ? " R" + fmt(r.base) : "") + (f.count > 1 ? " ×" + f.count : ""); }
-  if(f.category === "chamfer"){ const s = get("Size"); return "모따기" + (s ? " " + fmt(s.base) : "") + (f.count > 1 ? " ×" + f.count : ""); }
+  if(f.category === "chamfer"){ const s = p.find(x => x.short === "Size"), s2 = p.find(x => x.short === "Size2"); return "모따기" + (s ? " " + fmt(s.base) + (s2 ? "×" + fmt(s2.base) : "") : "") + (f.count > 1 ? " ×" + f.count : ""); }
   if(f.category === "face"){ const t = get("Thickness"); return (t ? (f.kind === "land" ? "가공면 " : "두께 ") + fmt(t.base) : "면 이동") + (f.side ? " · " + f.side.replace("-", "−") + " 면" : ""); }
   return f.label;
 }
@@ -523,7 +524,8 @@ function loaded(st){
   $("file").style.display = "flex"; $("fname").textContent = i.name;
   $("chips").innerHTML = `<span class="chip ${i.identical ? "ok" : "warn"}">${i.identical ? "✓ 원본과 동일" : "원본과 차이 " + i.xor_pct + "%"}</span>
     <span class="chip">피처 ${S.features.length}개</span><span class="chip">치수 ${np}개</span><span class="chip">분석 ${i.seconds}초</span>
-    ${i.skipped.length ? `<span class="chip warn" title="${i.skipped.join("\n")}">소재에 남김 ${i.skipped.length}</span>` : ""}`;
+    ${i.skipped.length ? `<span class="chip warn" title="${i.skipped.join("\n")}">소재에 남김 ${i.skipped.length}</span>` : ""}
+    ${(i.warnings || []).length ? `<span class="chip warn" title="${i.warnings.map(w => w.text).join("\n")}">⚠ 주의 ${i.warnings.length}</span>` : ""}`;
   $("leftSub").textContent = S.features.length ? `피처 ${S.features.length}개 · 클릭하면 3D에서 강조됩니다` : "바꿀 수 있는 형상을 찾지 못했습니다";
   $("q").value = ""; renderFilters(); renderList(); showApply(); renderFactors(); showResults(false); if(C) renderChat();
 }
@@ -645,7 +647,7 @@ const KINDC = {hole: "--hole", fillet: "--fillet", chamfer: "--chamfer", face: "
 function hex2(c){ c = c.replace("#", ""); if(c.length === 3) c = c.split("").map(x => x + x).join(""); return [0, 2, 4].map(i => parseInt(c.substr(i, 2), 16)); }
 function mixHex(a, b, t){ const x = hex2(a), y = hex2(b); return "#" + x.map((v, i) => Math.round(v + (y[i] - v) * t).toString(16).padStart(2, "0")).join(""); }
 function cssv(n){ return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
-function gtitle(g){ const n = g.items.length; return g.kind === "hole" ? `구멍 Ø${fmt(g.size)}` + (n > 1 ? ` × ${n}` : "") : g.kind === "fillet" ? `필렛 R${fmt(g.size)} · 면 ${n}개` : `모따기 ${fmt(g.size)} · 면 ${n}개`; }
+function gtitle(g){ const n = g.items.length; return g.kind === "hole" ? `구멍 Ø${fmt(g.size)}` + (n > 1 ? ` × ${n}` : "") : g.kind === "fillet" ? `필렛 R${fmt(g.size)} · 면 ${n}개` : `모따기 ${fmt(g.size)}${g.size2 ? " × " + fmt(g.size2) : ""} · 면 ${n}개`; }
 function ititle(it){
   if(it.kind === "face") return `평면 ${it.side ? it.side.replace("-", "−") + " 방향" : ""} · 면적 ${fmt(it.size, 0)} mm²`;
   const g = pick.gById[it.group]; return g ? gtitle(g) : KIND[it.kind];
@@ -688,7 +690,7 @@ function renderPick(){
     if(!show(g.kind) || (q && !gtitle(g).toLowerCase().includes(q))) continue;
     const n = g.items.filter(i => pick.chosen.has(i)).length;
     h += `<div class="grp ${n ? "on" : ""}" data-g="${g.id}" style="--c:var(${KINDC[g.kind]})"><span class="cb ${n === g.items.length ? "full" : n ? "part" : ""}"></span>
-      <div><b>${gtitle(g)}</b><small>${n === g.items.length ? "모두 선택" : n ? `${n} / ${g.items.length} 선택` : "누르면 묶음 전체를 고릅니다"}</small></div></div>`;
+      <div><b>${gtitle(g)}</b><small>${n === g.items.length ? "모두 선택" : n ? `${n} / ${g.items.length} 선택` : "누르면 묶음 전체를 고릅니다"}</small>${g.rim_unknown ? `<small class="warnline">⚠ 입구에 인식하지 못한 형상이 있어 지름을 바꿔도 그 부분은 따라가지 않습니다</small>` : ""}</div></div>`;
   }
   if(show("face") && pick.planes.length){
     const ns = pick.planes.filter(i => pick.chosen.has(i.id)).length, list = pick.planes.filter(i => (pick.planesOpen || pick.chosen.has(i.id)) && (!q || ititle(i).toLowerCase().includes(q)));
@@ -715,7 +717,9 @@ async function makeDims(all){
   if(all && !confirm("모든 후보를 자동으로 처리합니다. 면이 많은 부품은 몇 분 이상 걸릴 수 있습니다. 계속할까요?")) return;
   busy(true, "치수를 만드는 중", all ? "모든 후보" : $("pickMsg").textContent); watchProgress(true);
   try{ const st = await post("/api/make", all ? {all: true} : {items: [...pick.chosen]}); loaded(st);
-    if(st.info.auto_added) toast(`구멍 입구의 모따기·필렛 면 ${st.info.auto_added}개를 함께 치수로 만들었습니다`, 5000);
+    const W = st.info.warnings || [];
+    if(W.length) toast("주의: " + W.map(w => w.hole ? `Ø${fmt(w.hole)} 구멍 입구의 형상 일부를 인식하지 못해 지름을 바꿔도 따라가지 않습니다` : "구멍 입구의 모따기·필렛 일부를 다시 만들지 못해 원래 형상으로 남았습니다").join(" / "), 9000);
+    else if(st.info.auto_added) toast(`구멍 입구의 모따기·필렛 면 ${st.info.auto_added}개를 함께 치수로 만들었습니다`, 5000);
     else if(st.info.skipped.length) toast("일부는 치수로 만들지 못해 원래 형상에 남겼습니다 (위쪽 표시에 마우스를 올려 보세요)", 5000); }
   catch(e){ toast("만들 수 없습니다: " + e.message, 6000); }
   watchProgress(false); busy(false);
