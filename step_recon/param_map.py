@@ -44,8 +44,16 @@ def _features(doc, plist):
         feat = groups[name]["feat"]
         edges = []
         sk = P._profile(feat)
+        kind = feat.TypeId.split("::")[-1]
         try:
-            if sk is not None and sk.TypeId == "Sketcher::SketchObject":
+            if hasattr(feat, "SR_StripData"):       # chamfer strips cut by a tool: their corner lines
+                import json
+                import Part
+                kind = "Chamfer"
+                for d in json.loads(feat.SR_StripData):
+                    pts = [App.Vector(*v) for v in d["p"]]
+                    edges.append(Part.makePolygon(pts) if len(pts) > 2 else Part.makeLine(pts[0], pts[-1]))
+            elif sk is not None and sk.TypeId == "Sketcher::SketchObject":
                 edges = list(sk.Shape.Edges)
             elif sk is not None:            # profile is a face of an earlier feature (movable faces)
                 for sub in feat.Profile[1]:
@@ -67,7 +75,7 @@ def _features(doc, plist):
         # a balloon on every hole of a sketch, but only on two of the edges of a fillet / chamfer: the coloured
         # edges already show where it runs
         keep = 8 if sk is not None else 2
-        out.append({"n": n, "name": feat.Name, "label": feat.Label, "type": feat.TypeId.split("::")[-1], "edges": edges,
+        out.append({"n": n, "name": feat.Name, "label": feat.Label, "type": kind, "edges": edges,
                     "anchors": anchors[:keep], "count": len(anchors), "params": groups[name]["params"]})
     return out
 

@@ -76,6 +76,9 @@ def collect(doc):
             continue
         if o.Name in movers:
             continue
+        if hasattr(o, "SR_StripData"):      # chamfer strips cut by a tool (sharpen.apply_strips): one size for all
+            add(f"{_clean(o.Label)}.Size", float(o.SR_Size), "length", obj=o.Name, prop="SR_Size")
+            continue
         if t in FEATURE_PROPS:
             label = _clean(o.Label)
             for prop in FEATURE_PROPS[t]:
@@ -166,8 +169,43 @@ def _with_rim(shape, moves):
     return out
 
 
+_plans = {}
+
+
+def with_strips(doc, shape, body=None):
+    """`shape` (the tip of a body) with the chamfer strips cut that are kept as tool cuts, at their current size.
+    None (and the reason in problems()) if one cannot be cut at that size."""
+    objs = [o for o in doc.Objects if hasattr(o, "SR_StripData") and (body is None or o.SR_Body == body)]
+    if not objs:
+        return shape
+    import json
+    from . import sharpen
+    key = ("strips", doc.Name, shape.hashCode(), round(shape.Volume, 6),
+           tuple((o.Name, round(float(o.SR_Size), 9)) for o in objs))
+    if key in _cache:
+        out, _rim_error[0] = _cache[key]
+        return out
+    out = shape
+    for o in objs:
+        tag = (doc.Name, o.Name)
+        if _plans.get(tag, (None,))[0] != hash(o.SR_StripData):
+            _plans[tag] = (hash(o.SR_StripData), json.loads(o.SR_StripData))
+        size, size0 = float(o.SR_Size), float(o.SR_Size0)
+        new = sharpen.apply_strips(out, _plans[tag][1], size / size0) if size > 0 and size0 > 0 else None
+        if new is None:
+            _rim_error[0] = f"{_clean(o.Label)}: a chamfer of {size:g} cannot be cut here"
+            out = None
+            break
+        out = new
+    if len(_cache) > 8:
+        _cache.clear()
+    _cache[key] = (out, _rim_error[0])
+    return out
+
+
 def result_shape(doc):
-    """The solid(s) the document describes: the tip of every body, with the faces moved whose rim goes along."""
+    """The solid(s) the document describes: the tip of every body, with the chamfer strips cut that are kept as tool
+    cuts and with the faces moved whose rim goes along."""
     import Part
     shapes = []
     _rim_error[0] = ""
@@ -175,7 +213,9 @@ def result_shape(doc):
         if b.TypeId == "PartDesign::Body":
             t = b.Tip if b.Tip is not None else b.BaseFeature
             if t is not None and not t.Shape.isNull():
-                shape = t.Shape
+                shape = with_strips(doc, t.Shape, b.Name)
+                if shape is None:
+                    return None
                 inside = {x.Name for x in b.Group}
                 moves = [o for o in doc.Objects if hasattr(o, "SR_RimPlane") and o.Name in inside and o.SR_Rim
                          and abs(float(o.SR_Offset)) > 1e-9]

@@ -109,6 +109,25 @@ gain, took = res["shape"].Volume - sg.Volume, body.Volume - only_strips.Volume
 report("strips between a flat tip and a curved flank, ending at another chamfer: removed (seam lines may stay)",
        res["method"] == "wedges" and res["failed"] == 0 and res["shape"].isValid() and 0.90 * took < gain < 1.0 * took,
        f"{time.time() - t0:.1f}s {len(strips)} strips, volume back {gain:.3f} of {took:.3f} (the rest is under the end chamfer)")
+t0 = time.time()
+sess3, rep3 = machined.build_selected(sg, [], strips, [])
+c3 = sess3.compare()
+report("those strips as a parameter (cut by a tool where the kernel's chamfer fails): equals the file",
+       (c3.get("converged") or c3.get("near")) and rep3.get("strip_tools") == len(strips),
+       f"{time.time() - t0:.1f}s tool strips {rep3.get('strip_tools')} xor {c3.get('xor_pct')} skipped={rep3['skipped'][:1]}")
+m3 = os.path.join(tmp, "spline.FCStd")
+sess3.save(m3)
+App.closeDocument(sess3.doc.Name)
+doc3 = App.openDocument(m3)
+pl3 = P.collect(doc3)
+sz = [p for p in pl3 if p["name"].startswith("Chamfer") and p["name"].endswith(".Size") and abs(p["value"] - 0.35) < 0.02]
+v3 = P.result_shape(doc3).Volume
+P.apply(doc3, pl3, {sz[0]["name"]: 0.7} if sz else {})
+doc3.recompute()
+s3 = P.result_shape(doc3)
+report("spline strips 0.35 -> 0.7 after saving and opening: valid, smaller", bool(sz) and not P.problems(doc3) and s3.isValid()
+       and s3.Volume < v3 - 5.0, f"{[p['name'] for p in sz]} {s3.Volume - v3:+.2f} mm3" if s3 is not None else str(P.problems(doc3)))
+App.closeDocument(doc3.Name)
 # ------------------------------------------------------------ bolt holes: conical chamfers on the rims
 plain = Part.makeBox(120, 90, 20).fuse(Part.makeCylinder(12, 15, V(60, 45, 20))).removeSplitter()      # block with a boss
 centres = [(15 + 18 * i, 12 + 22 * j) for i in range(6) for j in range(4) if not (40 < 15 + 18 * i < 80 and 30 < 12 + 22 * j < 60)]

@@ -626,3 +626,185 @@ def fill_wedges(shape, face_ids, faces=None):
         return out, done
     except Exception:
         return None, []
+
+
+# ------------------------------------------------------------------ strips as a parameter, without the kernel's chamfer
+# Where the CAD kernel cannot put a chamfer back on the restored edge (curved flanks, ends that run into other chamfers)
+# the strip is still a parameter: its cross-section is a triangle corner - leg - leg, known all along the strip, and a
+# chamfer of another size is the same triangle scaled about the corner. The part is then the sharp solid minus (or, in
+# a hollow corner, plus) a tool swept through the scaled triangles and stopped by the faces at the strip's ends.
+def _closest(p1, d1, p2, d2):
+    """Where the lines p1 + s d1 and p2 + r d2 come closest: (midpoint, gap, s, r) or None if parallel."""
+    w = p1 - p2
+    a, b, c = d1.dot(d1), d1.dot(d2), d2.dot(d2)
+    d, e = d1.dot(w), d2.dot(w)
+    den = a * c - b * b
+    if abs(den) < 1e-12:
+        return None
+    s, r = (b * e - c * d) / den, (a * e - b * d) / den
+    q1, q2 = p1 + d1 * s, p2 + d2 * r
+    return (q1 + q2) * 0.5, (q1 - q2).Length, s, r
+
+
+def _strip_others(i, faces, adj, picked):
+    """[(edge, neighbour face, its number)] for strip i, longest edges first, or None if it is not a simple strip."""
+    f = faces[i]
+    if type(f.Surface).__name__ in ("Cylinder", "Toroid", "Sphere", "Cone") or not 4 <= len(f.Edges) <= 8:
+        return None
+    others = []
+    for e in f.Edges:
+        hit = [j for j in adj[i] if any(e.isSame(x) for x in faces[j].Edges)]
+        if len(hit) != 1:
+            return None
+        others.append((e, faces[hit[0]], hit[0]))
+    others.sort(key=lambda x: -x[0].Length)
+    if others[2][0].Length > 0.5 * others[1][0].Length or any(j in picked for _, _, j in others[2:]):
+        return None
+    return others
+
+
+def strip_plan(shape, face_ids, faces=None):
+    """What is needed to cut each chamfer strip again at any size: [{"face", "a", "b", "p" (points along the two long
+    edges and the corner line), "ends" (planes that stop it), "convex", "leg", "width", "slack", "probe"}]. Plain
+    numbers only, so it can be stored in the document."""
+    faces = faces if faces is not None else shape.Faces
+    picked = set(int(i) for i in face_ids)
+    adj = _adjacent(faces)
+    out = []
+
+    def r6(v):
+        return [round(v.x, 7), round(v.y, 7), round(v.z, 7)]
+
+    for i in sorted(picked):
+        try:
+            others = _strip_others(i, faces, adj, picked)
+            if others is None:
+                continue
+            f = faces[i]
+            (ea, fa, _), (eb, fb, _) = others[0], others[1]
+            width = f.Area / max(ea.Length, 1e-12)
+            # the stretch of ea that has eb opposite
+            t0, t1 = ea.FirstParameter, ea.LastParameter
+            ts = sorted(min(max(ea.Curve.parameter(v.Point), t0), t1) for v in eb.Vertexes)
+            if len(ts) != 2 or ts[1] - ts[0] < 0.3 * (t1 - t0):
+                continue
+            straight = type(ea.Curve).__name__ == "Line" and type(eb.Curve).__name__ == "Line"
+            n = 3 if straight else 13
+            A, B, P = [], [], []
+            ok = True
+            for k in range(n):
+                t = ts[0] + (ts[1] - ts[0]) * k / (n - 1.0)
+                a = ea.valueAt(t)
+                tb = min(max(eb.Curve.parameter(a), eb.FirstParameter), eb.LastParameter)
+                b = eb.valueAt(tb)
+                da = fa.normalAt(*fa.Surface.parameter(a)).cross(ea.tangentAt(t))
+                db = fb.normalAt(*fb.Surface.parameter(b)).cross(eb.tangentAt(tb))
+                if da.Length < 1e-9 or db.Length < 1e-9:
+                    ok = False
+                    break
+                da.normalize()
+                db.normalize()
+                if da.dot(b - a) < 0:
+                    da = da * -1
+                if db.dot(a - b) < 0:
+                    db = db * -1
+                hit = _closest(a, da, b, db)
+                if hit is None or hit[1] > 0.2 * width or hit[2] <= 0 or hit[3] <= 0 or max(hit[2], hit[3]) > 6 * width:
+                    ok = False
+                    break
+                A.append(a)
+                B.append(b)
+                P.append(hit[0])
+            if not ok:
+                continue
+            ends = []
+            c = f.CenterOfMass
+            for e, g, _ in others[2:]:
+                pe = _plane_of(g)
+                if pe is None:
+                    m = e.valueAt((e.FirstParameter + e.LastParameter) / 2.0)
+                    ne = g.normalAt(*g.Surface.parameter(m))
+                    pe = (ne, ne.dot(m))
+                nn, dd = pe
+                if nn.dot(c) - dd < 0:
+                    nn, dd = nn * -1, -dd
+                ends.append([nn.x, nn.y, nn.z, dd])
+            mid = len(A) // 2
+            probe = (A[mid] + B[mid] + P[mid]) * (1.0 / 3.0)
+            leg = sum((A[k] - P[k]).Length + (B[k] - P[k]).Length for k in range(n)) / (2.0 * n)
+            overlap = sum((A[k + 1] - A[k]).Length for k in range(n - 1))
+            out.append({"face": i, "a": [r6(v) for v in A], "b": [r6(v) for v in B], "p": [r6(v) for v in P],
+                        "ends": [[round(x, 9) for x in e] for e in ends], "convex": not shape.isInside(probe, 1e-7, False),
+                        "leg": leg, "width": width, "slack": max(ea.Length - overlap, 0.0), "probe": r6(probe),
+                        "straight": straight, "reach": f.BoundBox.DiagonalLength})
+        except Exception:
+            continue
+    return out
+
+
+def strip_tool(d, k):
+    """The solid that makes strip d a chamfer k times its original size when cut from (fused to) the sharp part."""
+    V = App.Vector
+    A, B, P = ([V(*v) for v in d[q]] for q in ("a", "b", "p"))
+    n = len(A)
+    grow = max(k, 1.0)
+    secs = []
+    for i in range(n):
+        a, b = P[i] + (A[i] - P[i]) * k, P[i] + (B[i] - P[i]) * k
+        m = (a + b) * 0.5
+        # a little wider than the strip and reaching past the corner: the tool must hold the whole corner piece even
+        # where the side faces bulge, and its sides must lie outside the part
+        secs.append((a + (a - b) * 0.25, b + (b - a) * 0.25, P[i] + (P[i] - m)))
+    # past both ends, straight on: the faces at the ends stop it
+    ext = d["slack"] + 4.0 * d["width"] * grow + 1e-3
+    t0, t1 = P[0] - P[1], P[-1] - P[-2]
+    t0.normalize()
+    t1.normalize()
+    first = tuple(x + t0 * ext for x in secs[0])
+    last = tuple(x + t1 * ext for x in secs[-1])
+    secs = [first, last] if d.get("straight") else [first] + secs + [last]
+    wires = [Part.makePolygon([s[0], s[1], s[2], s[0]]) for s in secs]
+    tool = Part.makeLoft(wires, True, bool(d.get("straight")))
+    if tool.Volume < 0:
+        tool.reverse()
+    size = d["reach"] + 2 * ext + 8.0 * d["width"] * grow
+    c = V(*d["probe"])
+    for nx, ny, nz, dd in d["ends"]:
+        nn = V(nx, ny, nz)
+        inside = c if nn.dot(c) - dd > 1e-9 else c + nn * (1e-6 + dd - nn.dot(c))
+        tool = tool.common(_half_space((nn, dd), inside, size))
+    if not tool.Solids:
+        return None
+    return tool.Solids[0] if len(tool.Solids) == 1 else max(tool.Solids, key=lambda s: s.Volume)
+
+
+def apply_strips(shape, plans, k):
+    """The sharp `shape` with every strip of `plans` cut as a chamfer k times its original size. None if that fails."""
+    if not 0.02 <= k <= 5.0:
+        return None
+    try:
+        cut, add = [], []
+        for d in plans:
+            t = strip_tool(d, k)
+            if t is None or not t.isValid():
+                return None
+            (cut if d["convex"] else add).append(t)
+        out = shape
+        if cut:
+            out = out.cut(cut, 1e-6)
+        if add:
+            out = out.fuse(add, 1e-6)
+        if not out.Solids or len(out.Solids) != len(shape.Solids):
+            return None
+        out = out.Solids[0] if len(out.Solids) == 1 else out
+        if not out.isValid():
+            return None
+        try:
+            refined = out.copy().removeSplitter()
+            if refined.isValid() and abs(refined.Volume - out.Volume) <= 1e-6 * max(out.Volume, 1.0):
+                out = refined
+        except Exception:
+            pass
+        return out
+    except Exception:
+        return None

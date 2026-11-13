@@ -504,6 +504,22 @@ class Studio:
                 owner_of_key[k] = n
             prev = keys
         owner = [owner_of_key.get(_face_key(f), 0) for f in shape.Faces]
+        # chamfer strips cut by a tool (no PartDesign feature): the faces the tool made, given to the nearest strip
+        strips = [o for o in self.doc.Objects if hasattr(o, "SR_StripData") and o.Name in number]
+        if strips:
+            try:
+                import json
+                probes = [(App.Vector(*d["probe"]), number[o.Name]) for o in strips for d in json.loads(o.SR_StripData)]
+                tip = set()
+                for b in self.doc.Objects:
+                    if b.TypeId == "PartDesign::Body" and b.Tip is not None:
+                        tip |= {_face_key(f) for f in b.Tip.Shape.Faces}
+                for i, f in enumerate(shape.Faces):
+                    if _face_key(f) not in tip:
+                        c = f.CenterOfMass
+                        owner[i] = min(probes, key=lambda pn: (pn[0] - c).Length)[1]
+            except Exception:
+                pass
         # a movable face that has not been moved made no faces of its own: show the face it would move
         for o in self._body_features():
             if not hasattr(o, "SR_Pair") or o.Name not in number:

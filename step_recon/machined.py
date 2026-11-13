@@ -365,10 +365,33 @@ def _cut_holes(sess, target, report, exclude, only=None):
 
 def _dress(sess, report):
     """Put fillets and chamfers back: the sharp edges of the solid that the reference lacks, with the sizes
-    measured there (Session.list_edges). Each group must bring the solid closer to the reference."""
+    measured there (Session.list_edges). Each group must bring the solid closer to the reference - by the matched
+    faces AND locally: where each sharp edge was, the new solid must have material exactly where the reference has.
+    Next to seams left by a removal the face count alone can be fooled (seen: the same wrong chamfer accepted six
+    times on the short edges at the ends of gear-tooth strips). A suggestion is applied once only."""
+    applied = set()
+
+    def mids(ids):
+        s = sess.result_shape()
+        out = []
+        for i in ids:
+            try:
+                e = s.Edges[i]
+                out.append(e.valueAt((e.FirstParameter + e.LastParameter) / 2.0))
+            except Exception:
+                pass
+        return out
+
+    def agrees(points):
+        s = sess.result_shape()
+        if s is None:
+            return False
+        bad = sum(1 for p in points if sess.ref.isInside(p, 1e-6, False) != s.isInside(p, 1e-6, False))
+        return bad <= len(points) // 4
+
     for k in range(40):
         todo = [e for e in sess.list_edges(only_missing=True).get("edges", []) if e.get("suggest")]
-        todo = [e for e in todo if str(e["suggest"]) not in report["_refused"]]
+        todo = [e for e in todo if str(e["suggest"]) not in report["_refused"] and str(e["suggest"]) not in applied]
         if not todo:
             return
         left = len({str(e["suggest"]) for e in todo})
@@ -378,6 +401,7 @@ def _dress(sess, report):
             list(s.values())[0], list) else list(s.values())[0])
         ids = [e["edge"] for e in todo if e["suggest"] == first]
         before = sess.compare(quick=True)["xor_pct"]       # quick: faces matched one to one, no booleans
+        points = mids(ids)
         kind, size = list(first.items())[0]
         if kind == "chamfer2":      # the legs are listed for the edge's first / second face: the measured orientation
             flip = fc_tools.chamfer2_flip()
@@ -387,7 +411,8 @@ def _dress(sess, report):
                 r = sess.chamfer2(ids, size[0], size[1], not flip)
         else:
             r = sess.fillet(ids, size) if kind == "fillet" else sess.chamfer(ids, size)
-        if r.get("ok") and sess.compare(quick=True)["xor_pct"] < before - 1e-9:
+        if r.get("ok") and agrees(points) and sess.compare(quick=True)["xor_pct"] < before - 1e-9:
+            applied.add(str(first))
             feat = sess.doc.getObject(r["feature"])
             feat.Label = (f"Fillet_R{size:g}" if kind == "fillet" else f"Chamfer_{size:g}" if kind == "chamfer"
                           else f"Chamfer_{max(size):g}x{min(size):g}") + (f"_x{len(ids)}" if len(ids) > 1 else "")
@@ -730,15 +755,68 @@ def _attempt(ref, blend_faces, exclude_holes, only_holes=None):
     if failed:
         App.closeDocument(sess.doc.Name)
         return _attempt(ref, blend_faces, exclude_holes | failed, only_holes)
+    c = None
     if blend_faces:
-        _dress(sess, report)
-    c = sess.compare()
+        # strips along curved faces (gear flanks): the kernel's chamfer does not take them, and trying costs long and
+        # can leave odd small chamfers at their ends - cut them by tool first, exactly
+        plans = sharpen.strip_plan(ref, blend_faces)
+        if plans and len(plans) == len(set(blend_faces)) and not all(d["straight"] for d in plans):
+            _tell("dress", 0.6)
+            c = _strips_by_tool(sess, ref, blend_faces, report, plans)
+        if c is None:
+            _dress(sess, report)
+    c = c or sess.compare()
+    if blend_faces and not (c.get("converged") or c.get("near")):
+        c = _strips_by_tool(sess, ref, blend_faces, report) or c
     report["_excluded_holes"] = exclude_holes
     if c.get("near") and not c.get("converged"):
         report["skipped"].append(f"tiny details were not reproduced: the result differs from the file by "
                                  f"{c.get('xor_pct')}% of the volume ({c.get('ref_faces')} faces in the file, "
                                  f"{c.get('new_faces')} here)")
     return sess, report, bool(c.get("converged") or c.get("near"))
+
+
+def _strips_by_tool(sess, ref, blend_faces, report, plans=None):
+    """Chamfer strips the kernel's chamfer could not put back (curved flanks, ends running into other chamfers): keep
+    them as tool cuts with one size per group (sharpen.apply_strips, params.with_strips). -> the comparison with the
+    reference if the part now equals it, else None (and nothing is kept)."""
+    import json
+    from . import compare as cmp_mod
+    try:
+        cur = sess.result_shape()
+        plans = [d for d in (plans if plans is not None else sharpen.strip_plan(ref, blend_faces))
+                 if cur.isInside(App.Vector(*d["probe"]), 1e-7, False) == d["convex"]]   # still sharp there
+        if not plans:
+            return None
+        groups = {}
+        for d in plans:
+            groups.setdefault(round(d["leg"], 2), []).append(d)
+        made = []
+        for size, ds in sorted(groups.items()):
+            o = sess.doc.addObject("App::FeaturePython", "StripChamfer")
+            o.addProperty("App::PropertyString", "SR_StripData", "steprecon", "the strips: sections along each one")
+            o.addProperty("App::PropertyFloat", "SR_Size", "steprecon", "chamfer size")
+            o.addProperty("App::PropertyFloat", "SR_Size0", "steprecon", "chamfer size in the file")
+            o.addProperty("App::PropertyString", "SR_Body", "steprecon", "the body it is cut from")
+            o.SR_StripData = json.dumps(ds, separators=(",", ":"))
+            o.SR_Size = o.SR_Size0 = float(size)
+            o.SR_Body = sess.body.Name
+            o.Label = f"Chamfer_{size:g}" + (f"_x{len(ds)}" if len(ds) > 1 else "")
+            made.append(o)
+        s = sess.result_shape()
+        c = cmp_mod.compare(ref, s) if s is not None else {}
+        if c.get("converged") or c.get("near"):
+            report["chamfers_made"] += len(plans)
+            report["features"] += len(made)
+            report["strip_tools"] = len(plans)
+            report["_refused"] = set()      # what the kernel's chamfer refused is covered now
+            return c
+        report["_strip_try"] = {k: c.get(k) for k in ("xor_pct", "volume_diff_pct", "ref_faces", "new_faces")}
+        for o in made:
+            sess.doc.removeObject(o.Name)
+    except Exception as e:
+        report["_strip_try"] = f"{type(e).__name__}: {e}"
+    return None
 
 
 def build(ref, progress=None):

@@ -97,6 +97,9 @@ class Session:
         if not shapes:
             return None
         if len(shapes) == 1:
+            if any(hasattr(o, "SR_StripData") for o in self.doc.Objects):
+                from . import params
+                return params.with_strips(self.doc, shapes[0])
             return shapes[0]
         from . import analyze
         solids = [x for s in shapes for x in s.Solids]
