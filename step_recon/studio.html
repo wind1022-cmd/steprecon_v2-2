@@ -762,7 +762,7 @@ async function removeSel(){
   if(!confirm(`고른 ${ids.length}개를 형상에서 없앱니다. 부품 형상 자체가 바뀌고, 만들어 둔 치수는 지워집니다. 계속할까요?\n(없앤 뒤 '없애기 취소'로 되돌릴 수 있습니다)`)) return;
   busy(true, "형상에서 없애는 중", ""); watchProgress(true);
   try{ const st = await post("/api/remove", {items: ids}); enterPick(st); const r = st.info.last_removed;
-    toast(`면 ${r.removed}개를 없앴습니다` + (r.added ? ` (연결된 끝면 모따기·필렛 ${r.added}개 포함)` : "") + ` · 부피 ${r.volume_pct > 0 ? "+" : ""}${r.volume_pct}%` + (r.failed ? ` · ${r.failed}개는 없애지 못했습니다` : "") + " · 위쪽에서 단순화된 STEP을 받을 수 있습니다", 8000); }
+    toast(`면 ${r.removed}개를 없앴습니다` + (r.added ? ` (연결된 끝면 모따기·필렛 ${r.added}개 포함)` : "") + ` · 부피 ${r.volume_pct > 0 ? "+" : ""}${r.volume_pct}%` + (r.failed ? ` · ${r.failed}개는 없애지 못했습니다` + (r.why ? ` (${r.why})` : "") : "") + " · 위쪽에서 단순화된 STEP을 받을 수 있습니다", 8000); }
   catch(e){ toast("없앨 수 없습니다: " + e.message, 7000); }
   watchProgress(false); busy(false);
 }

@@ -358,7 +358,8 @@ class Studio:
             res = self._run_job({"remove": faces, "ref": self.ref_brep, "out": out_brep,
                                  "step": os.path.join(self.dir, step)}, lambda f: 2 + 88 * f)
             if not res["removed"]:
-                raise ValueError("이 면들은 없앨 수 없었습니다 (주변 면을 늘려서 빈자리를 메울 수 없는 형상입니다)")
+                raise ValueError("이 면들은 없앨 수 없었습니다 (주변 면을 늘려서 빈자리를 메울 수 없는 형상입니다)"
+                                 + (" · " + res["why"] if res.get("why") else ""))
             self._step(92, "형상 불러오는 중")
             self._drop_doc()
             self.undo.append({"ref": self.ref, "brep": self.ref_brep, "cands": self.cands, "info": dict(self.info),
@@ -375,7 +376,7 @@ class Studio:
             self.selection, self.auto = [], False
             self.info = dict(self.info, faces=len(ref.Faces), built=False, simplified=step,
                              removed_total=self.info.get("removed_total", 0) + res["removed"],
-                             last_removed={"removed": res["removed"], "failed": res["failed"], "added": res.get("added", 0),
+                             last_removed={"removed": res["removed"], "failed": res["failed"], "added": res.get("added", 0), "why": res.get("why", ""),
                                            "method": res.get("method", ""),
                                            "volume_pct": round((ref.Volume - before) / before * 100, 3) if before else 0.0})
             self.aliases, self.highlight, self.plan = {}, 0, None

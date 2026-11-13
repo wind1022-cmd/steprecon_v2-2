@@ -301,3 +301,137 @@ def rebuild_prism(shape, face_ids, faces=None, progress=None):
         removed = sorted(picked & set(walls)) + sorted(rim_set)
         return solid, {"removed": removed, "axis": [n.x, n.y, n.z], "runs": runs, "rim": sorted(rim_set), "holes": gone}
     return None, "not an extrusion with features on its ends"
+
+
+# ------------------------------------------------------------------ flat chamfers: fill the wedge
+def _plane_of(face):
+    s = face.Surface
+    if type(s).__name__ != "Plane":
+        return None
+    n = App.Vector(s.Axis)
+    n.normalize()
+    return n, n.dot(App.Vector(s.Position))
+
+
+def _line_of(pa, pb):
+    """Intersection line of two planes (normal, offset): (point, direction) or None if parallel."""
+    (n1, d1), (n2, d2) = pa, pb
+    u = n1.cross(n2)
+    den = u.dot(u)
+    if den < 1e-12:
+        return None
+    p = (n2.cross(u) * d1 + u.cross(n1) * d2) * (1.0 / den)
+    u.normalize()
+    return p, u
+
+
+def _meet(line, plane):
+    (p, u), (n, d) = line, plane
+    den = n.dot(u)
+    if abs(den) < 1e-9:
+        return None
+    return p + u * ((d - n.dot(p)) / den)
+
+
+def _wedge(face, others):
+    """The piece a flat chamfer strip cut off: bounded by the strip, the planes of the two faces along its long edges
+    and the planes of the faces at its two ends. `others` = [(edge of the strip, neighbouring face)], one per edge.
+    Returns a solid or None if the strip is not of that simple kind."""
+    if len(others) != 4 or _plane_of(face) is None:
+        return None
+    others = sorted(others, key=lambda x: -x[0].Length)
+    (ea, fa), (eb, fb), (ec, fc), (ed, fd) = others
+    if ec.Length > 0.5 * eb.Length:
+        return None                                 # not a strip
+    pa, pb, pc, pd = _plane_of(fa), _plane_of(fb), _plane_of(fc), _plane_of(fd)
+    if None in (pa, pb, pc, pd):
+        return None
+    line = _line_of(pa, pb)
+    if line is None:
+        return None
+    p1, p2 = _meet(line, pc), _meet(line, pd)
+    if p1 is None or p2 is None or (p1 - p2).Length < 1e-7:
+        return None
+    width = face.Area / max(ea.Length, 1e-12)
+    for q, e in ((p1, ec), (p2, ed)):               # the corner the strip cut off lies close to the strip's end
+        if e.distToShape(Part.Vertex(q))[0] > 6.0 * width + 1e-6:
+            return None
+
+    def ends(edge, cap):                            # (vertex at this cap, the other vertex) of a long edge
+        v = [x.Point for x in edge.Vertexes]
+        if len(v) != 2:
+            return None
+        d0, d1 = cap.distToShape(Part.Vertex(v[0]))[0], cap.distToShape(Part.Vertex(v[1]))[0]
+        return (v[0], v[1]) if d0 < d1 else (v[1], v[0])
+
+    a, b = ends(ea, ec), ends(eb, ec)
+    if a is None or b is None:
+        return None
+    a0, a1 = a
+    b0, b1 = b
+
+    def poly(*pts):
+        return Part.Face(Part.makePolygon(list(pts) + [pts[0]]))
+
+    try:
+        shell = Part.Shell([poly(a0, a1, b1, b0), poly(a0, a1, p2, p1), poly(b0, b1, p2, p1), poly(a0, b0, p1), poly(a1, b1, p2)])
+        solid = Part.Solid(shell)
+        if solid.Volume < 0:
+            solid.reverse()
+        if not solid.isValid() or solid.Volume < 1e-12:
+            return None
+        return solid
+    except Exception:
+        return None
+
+
+def fill_wedges(shape, face_ids, faces=None):
+    """Remove flat chamfer strips that lie between flat faces by putting back exactly the wedge each one cut off (or,
+    in a hollow corner, taking the wedge it left away). Works where the outline route does not: teeth with a step,
+    chamfers that stop somewhere along an edge. Strips that touch another picked face at an end are not handled here.
+    -> (new shape, [face numbers removed]) or (None, [])"""
+    faces = faces if faces is not None else shape.Faces
+    picked = set(int(i) for i in face_ids)
+    adj = _adjacent(faces)
+    add, cut, done = [], [], []
+    for i in sorted(picked):
+        f = faces[i]
+        if type(f.Surface).__name__ != "Plane" or len(f.Edges) != 4:
+            continue
+        others = []
+        for e in f.Edges:
+            hit = [j for j in adj[i] if any(e.isSame(x) for x in faces[j].Edges)]
+            if len(hit) != 1:
+                break
+            others.append((e, faces[hit[0]], hit[0]))
+        if len(others) != 4:
+            continue
+        short = sorted(others, key=lambda x: -x[0].Length)[2:]
+        if any(j in picked for _, _, j in short):
+            continue                                # its end is another face to be removed: not this simple case
+        w = _wedge(f, [(e, g) for e, g, _ in others])
+        if w is None:
+            continue
+        c = w.CenterOfMass
+        (cut if shape.isInside(c, 1e-7, False) else add).append(w)
+        done.append(i)
+    if not done:
+        return None, []
+    try:
+        out = shape
+        if add:
+            out = out.fuse(add, 1e-6)
+        if cut:
+            out = out.cut(cut, 1e-6)
+        if not out.Solids or len(out.Solids) != len(shape.Solids):
+            return None, []
+        out = out.Solids[0] if len(out.Solids) == 1 else out
+        want = shape.Volume + sum(w.Volume for w in add) - sum(w.Volume for w in cut)
+        if not out.isValid() or abs(out.Volume - want) > 1e-6 * max(abs(want), 1.0) + 1e-4:
+            return None, []
+        refined = out.copy().removeSplitter()
+        if refined.isValid() and abs(refined.Volume - out.Volume) <= 1e-6 * max(out.Volume, 1.0):
+            out = refined
+        return out, done
+    except Exception:
+        return None, []

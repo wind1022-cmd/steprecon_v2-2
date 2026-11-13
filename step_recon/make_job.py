@@ -43,11 +43,26 @@ def main(path):
         res = machined.remove_faces_ex(ref, job["remove"], lambda f, i, n: say(
             p=0.05 + 0.8 * f, t=f"한꺼번에는 안 되어 부분별로 없애는 중 {i}/{n}"))
         new, done, failed = res["shape"], res["done"], res["failed"]
+        why = ""
+        if failed:          # what the picked faces look like: tells which case is not handled yet
+            from step_recon import sharpen
+            faces = ref.Faces
+            adj = sharpen._adjacent(faces)
+            pick = set(job["remove"])
+            own, around = {}, {}
+            for i in pick:
+                k = type(faces[i].Surface).__name__
+                own[k] = own.get(k, 0) + 1
+                for j in adj[i] - pick:
+                    k = type(faces[j].Surface).__name__
+                    around[k] = around.get(k, 0) + 1
+            why = ("고른 면: " + ", ".join(f"{k} {v}" for k, v in sorted(own.items()))
+                   + " / 이웃 면: " + ", ".join(f"{k} {v}" for k, v in sorted(around.items())))
         if done:
             new.exportBrep(job["out"])
             new.exportStep(job["step"])
             say(p=0.9, t="바꿀 수 있는 후보 다시 찾는 중")
-        say(done=True, removed=done, failed=failed, added=res["added"], method=res["method"], faces=len(new.Faces), volume=new.Volume,
+        say(done=True, removed=done, failed=failed, why=why, added=res["added"], method=res["method"], faces=len(new.Faces), volume=new.Volume,
             cands=machined.scan(new) if done else None)
         return
 

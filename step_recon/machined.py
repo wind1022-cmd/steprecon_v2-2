@@ -211,6 +211,17 @@ def _defeature(shape, face_ids):
         _defeature.extra = sorted(set(info["removed"]) - set(face_ids))
         return new
     try:
+        new, gone = sharpen.fill_wedges(shape, face_ids, faces)
+    except Exception:
+        new, gone = None, []
+    if new is not None:
+        left = [i for i in face_ids if i not in set(gone)]
+        if not left:
+            return new
+        rest = _find_again(faces, left, new)
+        more = _take_off(new, [new.Faces[j] for j in rest]) if len(rest) == len(left) else None
+        return more                                 # None: the remaining faces resist; the caller tries smaller groups
+    try:
         out = shape.defeaturing([faces[i] for i in face_ids])
     except Exception:
         return None
@@ -966,8 +977,33 @@ def remove_faces_ex(shape, face_ids, progress=None):
         out, done, failed = _remove_generic(new, rest, progress)
         return {"shape": out, "done": len(gone & set(ids)) + done, "failed": failed + len(left) - len(rest),
                 "added": added, "method": "outline+kernel"}
+    try:
+        new, gone = sharpen.fill_wedges(shape, ids, faces)
+    except Exception:
+        new, gone = None, []
+    if new is not None:
+        left = [i for i in ids if i not in set(gone)]
+        if not left:
+            return {"shape": new, "done": len(gone), "failed": 0, "added": 0, "method": "wedges"}
+        rest = _find_again(faces, left, new)
+        out, done, failed = _remove_generic(new, rest, progress)
+        return {"shape": out, "done": len(gone) + done, "failed": failed + len(left) - len(rest), "added": 0,
+                "method": "wedges+kernel"}
     out, done, failed = _remove_generic(shape, ids, progress)
     return {"shape": out, "done": done, "failed": failed, "added": 0, "method": "kernel"}
+
+
+def _find_again(faces, ids, new):
+    """Numbers in `new` of the faces `ids` of the old face list (same position and area); missing ones are left out."""
+    out = []
+    cand = [(f.CenterOfMass, f.Area) for f in new.Faces]
+    for i in ids:
+        c, a = faces[i].CenterOfMass, faces[i].Area
+        hit = next((j for j, (c2, a2) in enumerate(cand) if abs(a2 - a) <= 1e-6 * max(a, 1.0)
+                    and c2.distanceToPoint(c) < 1e-5), None)
+        if hit is not None:
+            out.append(hit)
+    return out
 
 
 def _remove_generic(shape, ids, progress=None):
