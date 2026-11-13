@@ -9,6 +9,8 @@ the clock running and applies CPU changes to this process while it works.
 
 job.json: {"ref": BREP file of the part as read, "fcstd": where to save, "everything": bool,
            "holes": [line keys], "blends": [face ids], "planes": [face ids]}
+      or {"scan": STEP/IGES file, "ref": BREP file to write}: read the file (a big STEP can take long) and find the
+           candidates; final message {"done": true, "faces": n, "cands": machined.scan(...)}
 stdout, one JSON object per line: {"p": 0..1, "t": text} progress, {"t": text, "stage": "save"|"compare"},
 finally {"done": true, "report": ..., "sketches": ..., "converged": bool, "xor_pct": number}."""
 import json
@@ -30,7 +32,15 @@ def main(path):
         job = json.load(f)
     import FreeCAD as App  # noqa: F401  (bootstrapped by step_recon/__init__)
     import Part
-    from step_recon import machined
+    from step_recon import analyze, machined
+
+    if job.get("scan"):
+        say(p=0.0, t="STEP 파일 읽는 중")
+        ref = analyze.load_shape(job["scan"])
+        ref.exportBrep(job["ref"])
+        say(p=0.5, t=f"형상 읽음: 면 {len(ref.Faces)}개 · 바꿀 수 있는 후보 찾는 중")
+        say(done=True, faces=len(ref.Faces), cands=machined.scan(ref))
+        return
 
     ref = Part.Shape()
     ref.importBrep(job["ref"])

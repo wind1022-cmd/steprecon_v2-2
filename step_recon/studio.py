@@ -8,6 +8,7 @@ one after the other, while small questions ("anything new?") are answered at onc
 
 An AI assistant drives the same engine through tools.py - over MCP (POST /mcp, see mcp.py) or the chat panel."""
 import csv
+import contextlib
 import json
 import math
 import os
@@ -22,6 +23,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 import FreeCAD as App
+import Part
 
 from . import analyze, cpu, chat as chat_mod, machined, mcp, param_map, params as P
 
@@ -201,19 +203,27 @@ class Studio:
         self.dir = os.path.join(self.workspace, base + time.strftime("_%Y%m%d_%H%M%S"))
         os.makedirs(self.dir, exist_ok=True)
         self._step(1, "STEP 파일 읽는 중")
-        ref = analyze.load_shape(path)
-        self._step(40, f"형상 읽음: 면 {len(ref.Faces)}개 · 바꿀 수 있는 후보 찾는 중")
+        # read + scan in the job process (a big STEP can take long); the BREP it writes keeps the face order
+        self.ref_brep = os.path.join(self.dir, "_reference.brep")
+        out = self._run_job({"scan": os.path.abspath(path), "ref": self.ref_brep}, lambda f: 1 + 80 * f)
+        with self._timed("reading the part back"):
+            ref = Part.Shape()
+            ref.importBrep(self.ref_brep)
+            if len(ref.Solids) == 1 and ref.ShapeType != "Solid":
+                ref = ref.Solids[0]
         self.ref, self.base, self.ref_volume = ref, base, ref.Volume
-        self.ref_brep = os.path.join(self.dir, "_reference.brep")       # what a make job reads (same face order)
-        ref.exportBrep(self.ref_brep)
-        self.cands = machined.scan(ref)
+        self.cands = out["cands"]
+        for it in self.cands["items"]:
+            if "key" in it:
+                it["key"] = tuple(it["key"])
         self.selection, self.auto = [], False
         self.info = {"name": name, "base": base, "folder": self.dir, "faces": len(ref.Faces),
                      "scan_seconds": round(time.time() - t0, 1), "built": False}
         self._step(90, "3D 화면 데이터 만드는 중")
         self.aliases, self.highlight, self.plan = {}, 0, None
         self.bump()
-        return self.state(mesh=True)
+        with self._timed("3D data of the part"):
+            return self.state(mesh=True)
 
     def make(self, items=(), everything=False):
         """Turn the picked candidates (ids from pick_state) - or everything - into features with dimensions.
@@ -249,7 +259,8 @@ class Studio:
         report, saved, cmp_ = out["report"], {"sketches": out.get("sketches", {})}, out
         self.selection, self.auto = ([] if everything else items), everything
         self._step(94, "결과 불러오는 중")
-        self.doc, self.base, self.fcstd = App.openDocument(fcstd), base, fcstd
+        with self._timed("loading the result"):
+            self.doc, self.base, self.fcstd = App.openDocument(fcstd), base, fcstd
         self.ref_volume = ref.Volume
         self._step(95, "바꿀 수 있는 치수 정리 중")
         self._collect()
@@ -263,10 +274,21 @@ class Studio:
                      "auto_added": len(report.get("auto_added", [])), "warnings": report.get("warnings", [])}
         self.bump()
         self._step(97, "3D 화면 데이터 만드는 중")
-        return self.state(mesh=True)
+        with self._timed("3D data of the result"):
+            return self.state(mesh=True)
 
-    def _run_job(self, job):
-        """Run make_job.py in a child process, follow its progress, return its final message."""
+    @contextlib.contextmanager
+    def _timed(self, what):
+        """Steps that still run inside the app (they hold it while they work): say on the console when one is slow."""
+        t = time.time()
+        yield
+        dt = time.time() - t
+        if dt > 2:
+            print(f"             note: {what} took {dt:.1f} s inside the app (the window waited meanwhile)", flush=True)
+
+    def _run_job(self, job, scale=None):
+        """Run make_job.py in a child process, follow its progress, return its final message.
+        scale: maps the job's progress fraction to the percentage shown (default: 2 .. 85)."""
         path = os.path.join(self.dir, "_make_job.json")
         with open(path, "w", encoding="utf-8") as f:
             json.dump(job, f)
@@ -289,7 +311,7 @@ class Studio:
                 if msg.get("done"):
                     final = msg
                 elif "p" in msg:
-                    self._step(2 + 83 * float(msg["p"]), msg.get("t", ""))
+                    self._step(scale(float(msg["p"])) if scale else 2 + 83 * float(msg["p"]), msg.get("t", ""))
                 elif msg.get("stage") == "save":
                     self._step(86, msg.get("t", ""))
                 elif msg.get("stage") == "compare":

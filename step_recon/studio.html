@@ -619,8 +619,16 @@ async function answerPlan(ok){ try{ await post("/api/chat/approve", {ok}); await
 /* ---------------------------------------------------------------- CPU setting and progress of an analysis */
 let cpuState = null, cpuTimer = 0, progTimer = 0;
 function fmtTime(s){ s = Math.round(s || 0); return s < 60 ? s + "초" : Math.floor(s / 60) + "분 " + (s % 60) + "초"; }
-let lastPct = -1, lastPctAt = 0;
+let lastPct = -1, lastPctAt = 0, clock = null;
 function showProgress(p){
+  const now = Date.now() / 1000;
+  if(!clock || (p.elapsed || 0) + 1 < clock.seen) clock = {t0: now - (p.elapsed || 0), seen: 0};
+  clock.seen = p.elapsed || 0; clock.p = p;
+  if(!clock.timer) clock.timer = setInterval(() => { if(!$("overlay").classList.contains("show")){ clearInterval(clock.timer); clock = null; return; }
+    const q = Object.assign({}, clock.p, {elapsed: Date.now() / 1000 - clock.t0}); paintProgress(q); }, 1000);
+  paintProgress(Object.assign({}, p, {elapsed: Math.max(p.elapsed || 0, now - clock.t0)}));
+}
+function paintProgress(p){
   if(p.pct !== lastPct){ lastPct = p.pct; lastPctAt = p.elapsed || 0; }
   const still = (p.elapsed || 0) - lastPctAt > 8;
   $("ovBar").classList.toggle("busyline", still);
