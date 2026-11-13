@@ -385,17 +385,80 @@ def _wedge(face, others):
         return None
 
 
+def _ring(i, faces, adj):
+    """The ring a conical chamfer cut off between a coaxial cylinder (hole or shaft) and a flat face square to the
+    axis: (solid, key, test point) or None. The key is the same for both halves of a cone stored as two faces."""
+    f = faces[i]
+    axis = App.Vector(f.Surface.Axis)
+    axis.normalize()
+    cyl = pln = None
+    for e in f.Edges:
+        if type(e.Curve).__name__ != "Circle":
+            continue
+        for j in adj[i]:
+            g = faces[j]
+            if not any(e.isSame(x) for x in g.Edges):
+                continue
+            k = type(g.Surface).__name__
+            if k == "Cylinder" and App.Vector(g.Surface.Axis).cross(axis).Length < 1e-6 \
+                    and abs(g.Surface.Radius - e.Curve.Radius) < 1e-6:
+                cyl = e
+            elif k == "Plane" and abs(abs(App.Vector(g.Surface.Axis).dot(axis)) - 1.0) < 1e-6:
+                pln = e
+    if cyl is None or pln is None:
+        return None
+    r_c, r_p = cyl.Curve.Radius, pln.Curve.Radius
+    z_c, z_p = axis.dot(cyl.Curve.Center), axis.dot(pln.Curve.Center)
+    if abs(r_c - r_p) < 1e-7 or abs(z_c - z_p) < 1e-7:
+        return None
+    base = App.Vector(cyl.Curve.Center) - axis * z_c
+    u = axis.cross(App.Vector(1, 0, 0))
+    if u.Length < 1e-6:
+        u = axis.cross(App.Vector(0, 1, 0))
+    u.normalize()
+
+    def at(r, z):
+        return base + axis * z + u * r
+
+    try:
+        tri = Part.Face(Part.makePolygon([at(r_c, z_c), at(r_p, z_p), at(r_c, z_p), at(r_c, z_c)]))
+        solid = tri.revolve(base, axis, 360)
+        if solid.ShapeType != "Solid":
+            solid = Part.Solid(Part.Shell(solid.Faces))
+        if solid.Volume < 0:
+            solid.reverse()
+        if not solid.isValid() or solid.Volume < 1e-12:
+            return None
+    except Exception:
+        return None
+    key = (round(base.x, 4), round(base.y, 4), round(base.z, 4), round(abs(axis.x), 5), round(abs(axis.y), 5),
+           round(r_c, 5), round(r_p, 5), round(z_c, 4), round(z_p, 4))
+    return solid, key, at((2 * r_c + r_p) / 3.0, (z_c + 2 * z_p) / 3.0)
+
+
 def fill_wedges(shape, face_ids, faces=None):
-    """Remove flat chamfer strips that lie between flat faces by putting back exactly the wedge each one cut off (or,
-    in a hollow corner, taking the wedge it left away). Works where the outline route does not: teeth with a step,
+    """Remove flat chamfer strips that lie between flat faces, and conical chamfers between a cylinder and a flat face
+    (rims of holes, ends of shafts), by putting back exactly the wedge / ring each one cut off (or, in a hollow
+    corner, taking away what it left). Local and exact - no surface of the part has to be extended by the kernel,
+    so it stays fast on parts with thousands of faces. Works where the outline route does not: teeth with a step,
     chamfers that stop somewhere along an edge. Strips that touch another picked face at an end are not handled here.
     -> (new shape, [face numbers removed]) or (None, [])"""
     faces = faces if faces is not None else shape.Faces
     picked = set(int(i) for i in face_ids)
     adj = _adjacent(faces)
     add, cut, done = [], [], []
+    rings = {}
     for i in sorted(picked):
         f = faces[i]
+        if type(f.Surface).__name__ == "Cone":      # chamfer on the rim of a hole or the end of a shaft
+            r = _ring(i, faces, adj)
+            if r is not None:
+                solid, key, probe = r
+                if key not in rings:
+                    rings[key] = True
+                    (cut if shape.isInside(probe, 1e-7, False) else add).append(solid)
+                done.append(i)
+            continue
         if type(f.Surface).__name__ != "Plane" or len(f.Edges) != 4:
             continue
         others = []

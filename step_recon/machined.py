@@ -1006,8 +1006,14 @@ def _find_again(faces, ids, new):
     return out
 
 
+KERNEL_BUDGET = 240.0       # seconds the kernel fallback may try patch by patch before it stops
+
+
 def _remove_generic(shape, ids, progress=None):
-    """The kernel route of remove_faces_ex: (new shape, removed, not removed)."""
+    """The kernel route of remove_faces_ex: (new shape, removed, not removed). Stops after KERNEL_BUDGET seconds:
+    on a part with thousands of faces every attempt costs seconds to minutes, and hundreds of them would take hours."""
+    import time as _time
+    deadline = _time.time() + KERNEL_BUDGET
     ids = sorted(set(ids))
     if not ids:
         return shape, 0, 0
@@ -1044,6 +1050,8 @@ def _remove_generic(shape, ids, progress=None):
         return new is not None
 
     for k, patch in enumerate(patches):
+        if _time.time() > deadline:
+            break
         if progress:
             progress(0.5 * k / len(patches), k + 1, len(patches))
         if len(patch) < len(ids):
@@ -1052,9 +1060,13 @@ def _remove_generic(shape, ids, progress=None):
         rest = [i for i in ids if i not in gone]
         before = len(gone)
         for k, i in enumerate(rest):
+            if _time.time() > deadline:
+                break
             if progress:
                 progress(0.5 + 0.125 * (rnd + k / len(rest)), k + 1, len(rest))
             attempt([i])
+        if _time.time() > deadline:
+            break
         if len(gone) == before or len(gone) == len(ids):
             break
     return cur, len(gone), len(ids) - len(gone)

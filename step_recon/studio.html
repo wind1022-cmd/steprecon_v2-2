@@ -535,7 +535,7 @@ function loaded(st){
   $("empty").style.display = "none"; $("toolbar").style.display = "flex"; $("hint").style.display = "block";
   $("file").style.display = "flex"; $("fname").textContent = i.name;
   $("chips").innerHTML = `<span class="chip ${i.identical || i.near ? "ok" : "warn"}" ${i.near ? 'title="아주 작은 형상(0.1 mm 정도의 호와 그 모따기 등)을 만들지 못해 면 개수만 다릅니다"' : ""}>${i.identical ? "✓ 원본과 동일" : i.near ? "≈ 원본과 거의 동일 (XOR " + i.xor_pct + "%)" : "원본과 차이 " + i.xor_pct + "%"}</span>
-    <span class="chip">피처 ${S.features.length}개</span><span class="chip">치수 ${np}개</span><span class="chip">분석 ${i.seconds}초</span>
+    <span class="chip">피처 ${S.features.length}개</span><span class="chip">치수 ${np}개</span><span class="chip" title="${(i.timings || []).map(t => t[0] + " " + t[1] + "초").join("\n")}">분석 ${i.seconds}초 ⓘ</span>
     ${i.skipped.length ? `<span class="chip warn" title="${i.skipped.join("\n")}">소재에 남김 ${i.skipped.length}</span>` : ""}
     ${(i.warnings || []).length ? `<span class="chip warn" title="${i.warnings.map(w => w.text).join("\n")}">⚠ 주의 ${i.warnings.length}</span>` : ""}`;
   $("leftSub").textContent = S.features.length ? `피처 ${S.features.length}개 · 클릭하면 3D에서 강조됩니다` : "바꿀 수 있는 형상을 찾지 못했습니다";

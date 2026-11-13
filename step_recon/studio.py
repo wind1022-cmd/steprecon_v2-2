@@ -280,7 +280,8 @@ class Studio:
                      "counts": {"holes": report["holes_made"], "fillets": report["fillets_made"],
                                 "chamfers": report["chamfers_made"], "faces": report.get("faces_made", 0)},
                      "sketches": saved.get("sketches", {}), "built": True, "auto": everything,
-                     "auto_added": len(report.get("auto_added", [])), "warnings": report.get("warnings", [])}
+                     "auto_added": len(report.get("auto_added", [])), "warnings": report.get("warnings", []),
+                     "timings": getattr(self, "timings", [])}
         self.bump()
         self._step(97, "3D 화면 데이터 만드는 중")
         with self._timed("3D data of the result"):
@@ -308,6 +309,14 @@ class Studio:
                                 creationflags=flags, env=env, text=True, encoding="utf-8", errors="replace")
         cpu.follow(proc.pid)
         self.job, self.cancelled = proc, False
+        spent, mark = {}, [time.time(), "시작 (프로그램 띄우기, 형상 읽기)"]
+
+        def stage(text):            # seconds per stage, numbers taken out of the text ("구멍 3/7" -> "구멍")
+            name = re.sub(r"\s*\d+\s*/\s*\d+|\(시도[^)]*\)|\d+개", "", text or "").strip() or "?"
+            now = time.time()
+            spent[mark[1]] = spent.get(mark[1], 0.0) + now - mark[0]
+            mark[0], mark[1] = now, name
+
         err = []
         threading.Thread(target=lambda: err.append(proc.stderr.read()), daemon=True).start()
         final = None
@@ -317,6 +326,8 @@ class Studio:
                     msg = json.loads(line)
                 except ValueError:
                     continue
+                if msg.get("t"):
+                    stage(msg["t"])
                 if msg.get("done"):
                     final = msg
                 elif "p" in msg:
@@ -331,6 +342,10 @@ class Studio:
             self.job = None
             if proc.poll() is None:
                 proc.kill()
+        stage("끝")
+        self.timings = [[k, round(v, 1)] for k, v in sorted(spent.items(), key=lambda kv: -kv[1]) if v >= 0.05]
+        if sum(v for _, v in self.timings) > 10:      # worth a note on the console: where the time went
+            print("             timing: " + ", ".join(f"{k} {v:g}s" for k, v in self.timings[:6]), flush=True)
         if final is None and self.cancelled:
             raise ValueError("중지했습니다")
         if final is None:
@@ -493,7 +508,19 @@ class Studio:
         pos, nor, fid, idx = [], [], [], []
         for fi, face in enumerate(shape.Faces):
             try:
-                verts, tris = face.tessellate(defl)
+                # small round faces need their own, finer step: with one step for the whole part a 10 mm bolt hole
+                # in a 400 mm housing was drawn as a square
+                srf = face.Surface
+                kind = type(srf).__name__
+                if kind in ("Cylinder", "Sphere"):
+                    fine = srf.Radius * 0.01
+                elif kind == "Toroid":
+                    fine = srf.MinorRadius * 0.01
+                elif kind == "Plane":
+                    fine = defl
+                else:
+                    fine = face.BoundBox.DiagonalLength * 0.004
+                verts, tris = face.tessellate(max(min(defl, fine), 2e-4))
             except Exception:
                 continue
             base = len(pos) // 3
@@ -514,7 +541,9 @@ class Studio:
         lines = []
         for e in shape.Edges:
             try:
-                pts = e.discretize(Deflection=defl) if type(e.Curve).__name__ not in ("Line", "LineSegment") \
+                ck = type(e.Curve).__name__
+                step = min(defl, e.Curve.Radius * 0.01) if ck == "Circle" else min(defl, e.Length * 0.004)
+                pts = e.discretize(Deflection=max(step, 2e-4)) if ck not in ("Line", "LineSegment") \
                     else [e.valueAt(e.FirstParameter), e.valueAt(e.LastParameter)]
             except Exception:
                 continue

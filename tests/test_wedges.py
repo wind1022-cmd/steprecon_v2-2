@@ -73,6 +73,40 @@ strip = [i for i, f in enumerate(hollow.Faces) if type(f.Surface).__name__ == "P
 new, gone = sharpen.fill_wedges(hollow, strip)
 report("hollow corner: the wedge is cut away", new is not None and abs(new.Volume - blk.Volume) < 1e-6 and len(gone) == 1)
 
+# ------------------------------------------------------------ bolt holes: conical chamfers on the rims
+plain = Part.makeBox(120, 90, 20).fuse(Part.makeCylinder(12, 15, V(60, 45, 20))).removeSplitter()      # block with a boss
+centres = [(15 + 18 * i, 12 + 22 * j) for i in range(6) for j in range(4) if not (40 < 15 + 18 * i < 80 and 30 < 12 + 22 * j < 60)]
+for x, y in centres:
+    plain = plain.cut(Part.makeCylinder(4, 20, V(x, y, 0)))
+rims = [e for e in plain.Edges if type(e.Curve).__name__ == "Circle" and abs(e.Curve.Radius - 4) < 1e-6 and abs(e.Curve.Center.z - 20) < 1e-6]
+shaft = [e for e in plain.Edges if type(e.Curve).__name__ == "Circle" and abs(e.Curve.Radius - 12) < 1e-6 and abs(e.Curve.Center.z - 35) < 1e-6]
+holed = plain.makeChamfer(1.0, rims + shaft)
+p2 = os.path.join(tmp, "holes.stp")
+holed.exportStep(p2)
+ref2 = analyze.load_shape(p2)
+cones = [i for i, f in enumerate(ref2.Faces) if type(f.Surface).__name__ == "Cone"]
+t0 = time.time()
+res = machined.remove_faces_ex(ref2, cones)
+report("chamfers on the rims of bolt holes and on a shaft end: rings filled, exact", res["method"] == "wedges" and res["failed"] == 0
+       and abs(res["shape"].Volume - plain.Volume) < 1e-6 and not any(type(f.Surface).__name__ == "Cone" for f in res["shape"].Faces),
+       f"{len(cones)} cone faces of {len(centres)} holes + boss in {time.time() - t0:.1f}s")
+sc2 = machined.scan(ref2)
+h8 = [it["key"] for it in sc2["items"] if it["kind"] == "hole" and abs(it["size"] - 8) < 1e-6]
+t0 = time.time()
+sess2, rep2 = machined.build_selected(ref2, h8, [], [])
+c2 = sess2.compare()
+report("bolt holes as parameters, their rim chamfers come along", c2.get("converged") and rep2["holes_made"] == len(centres)
+       and rep2["chamfers_made"] >= len(centres) and not rep2["warnings"], f"{time.time() - t0:.1f}s holes {rep2['holes_made']} chamfers {rep2['chamfers_made']}")
+sess2.save(os.path.join(tmp, "holes.FCStd"))
+pl2 = P.collect(sess2.doc)
+dia = next(p["name"] for p in pl2 if p["name"].endswith("Diameter1"))
+P.apply(sess2.doc, pl2, {dia: 10})
+sess2.doc.recompute()
+s2 = P.result_shape(sess2.doc)
+radii = sorted({round(e.Curve.Radius, 3) for f in s2.Faces if type(f.Surface).__name__ == "Cone" and f.BoundBox.ZMax < 21
+                for e in f.Edges if type(e.Curve).__name__ == "Circle"})
+report("diameter 8 -> 10: the chamfers follow the holes", not P.problems(sess2.doc) and radii == [5.0, 6.0], str(radii))
+App.closeDocument(sess2.doc.Name)
 # ------------------------------------------------------------ as a parameter
 t0 = time.time()
 sess, rep = machined.build_selected(ref, [], cham, [])

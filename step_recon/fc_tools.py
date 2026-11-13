@@ -812,14 +812,44 @@ class Session:
             def box(k, o):
                 b = o.BoundBox
                 return (b.XMin, b.XMax, b.YMin, b.YMax, b.ZMin, b.ZMax, o, k)
-            acc = self._acc = {"edges": [box(k, e) for k, e in enumerate(self.ref.Edges)],
-                               "faces": [box(k, f) for k, f in enumerate(self.ref.Faces)]}
+            cell = max(self.ref.BoundBox.DiagonalLength / 40.0, 1e-3)
+
+            def grid(items):        # boxes sorted into cells; the few that span many cells are always looked at
+                cells, big = {}, []
+                for it in items:
+                    lo = [int(it[a] // cell) for a in (0, 2, 4)]
+                    hi = [int(it[a] // cell) for a in (1, 3, 5)]
+                    if (hi[0] - lo[0] + 1) * (hi[1] - lo[1] + 1) * (hi[2] - lo[2] + 1) > 64:
+                        big.append(it)
+                        continue
+                    for i in range(lo[0], hi[0] + 1):
+                        for j in range(lo[1], hi[1] + 1):
+                            for k in range(lo[2], hi[2] + 1):
+                                cells.setdefault((i, j, k), []).append(it)
+                return {"all": items, "cells": cells, "big": big, "cell": cell}
+
+            acc = self._acc = {"edges": grid([box(k, e) for k, e in enumerate(self.ref.Edges)]),
+                               "faces": grid([box(k, f) for k, f in enumerate(self.ref.Faces)])}
         return acc
 
     @staticmethod
-    def _boxes_near(items, p, r):
+    def _boxes_near(g, p, r):
+        """Items of grid g whose box comes within r of point p. Looking at every box for every edge of the part is
+        quadratic - minutes on a part with thousands of faces."""
         x, y, z = p.x, p.y, p.z
-        return [it for it in items if it[0] - r <= x <= it[1] + r and it[2] - r <= y <= it[3] + r
+        cell = g["cell"]
+        if r > cell:
+            cand = g["all"]
+        else:
+            cand, seen = list(g["big"]), set()
+            for i in range(int((x - r) // cell), int((x + r) // cell) + 1):
+                for j in range(int((y - r) // cell), int((y + r) // cell) + 1):
+                    for k in range(int((z - r) // cell), int((z + r) // cell) + 1):
+                        for it in g["cells"].get((i, j, k), ()):
+                            if it[7] not in seen:
+                                seen.add(it[7])
+                                cand.append(it)
+        return [it for it in cand if it[0] - r <= x <= it[1] + r and it[2] - r <= y <= it[3] + r
                 and it[4] - r <= z <= it[5] + r]
 
     def _nearest_ref_face(self, p):
