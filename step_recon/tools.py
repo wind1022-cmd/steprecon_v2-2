@@ -182,7 +182,8 @@ def _name(st, key):
 
 
 def _unit(st, name):
-    return "deg" if next(p for p in st.plist if p["name"] == name)["kind"] == "angle" else "mm"
+    kind = next(p for p in st.plist if p["name"] == name)["kind"]
+    return "deg" if kind == "angle" else "" if kind == "flag" else "mm"
 
 
 def _current(st):
@@ -303,7 +304,8 @@ def get_part(st, category=None, feature=None, density_g_cm3=None, candidates=Fal
         counts[f["category"]] = counts.get(f["category"], 0) + 1
     out.append(f"Features: {len(s['features'])} (" + ", ".join(f"{v} {k}" for k, v in counts.items()) + ")"
                + (f", {len(feats)} shown" if len(feats) != len(s["features"]) else ""))
-    hints = {"Thickness": "distance from this face to the opposite side of the material; larger moves the face outward",
+    hints = {"WithRim": "1 = the chamfers / fillets around this face move along with it, 0 = they stay where they are",
+             "Thickness": "distance from this face to the opposite side of the material; larger moves the face outward",
              "Offset": "how far the face is moved outward (negative: inward)"}
     for f in feats:
         what = {"hole": f"{f['count']} hole(s)" if f["count"] > 1 else "hole",
@@ -368,6 +370,8 @@ def reset_values(st):
 def find_limits(st, name, low=None, high=None):
     _need(st)
     name = _name(st, name)
+    if next(p for p in st.plist if p["name"] == name)["kind"] == "flag":
+        raise ToolError(f"{name} is an on/off switch (1 or 0), not a size.")
     keep = st.changed()
     here = _current(st)[name]
     base = st.base_values[name]

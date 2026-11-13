@@ -196,7 +196,7 @@ def build_html(doc, plist, title):
             if f["count"] > 1:
                 where += " (+%d)" % (f["count"] - 1)
         plines = "".join('<div><code>%s</code><span>%.6g %s</span></div>'
-                         % (html.escape(p["name"]), p["value"], "deg" if p["kind"] == "angle" else "mm")
+                         % (html.escape(p["name"]), p["value"], "deg" if p["kind"] == "angle" else "" if p["kind"] == "flag" else "mm")
                          for p in f["params"])
         rows.append(f'<tr data-f="{f["n"]}"><td class="n"><i style="background:{col}"></i>{f["n"]}</td>'
                     f'<td>{html.escape(f["label"])}</td><td>{html.escape(f["type"])}</td><td class="v">{where}</td>'
@@ -220,7 +220,7 @@ def table(doc, plist):
         a = f["anchors"][0] if f["anchors"] else None
         for p in f["params"]:
             rows.append({"no": f["n"], "feature": f["label"], "name": p["name"], "value": round(p["value"], 6),
-                         "unit": "deg" if p["kind"] == "angle" else "mm",
+                         "unit": "deg" if p["kind"] == "angle" else "" if p["kind"] == "flag" else "mm",
                          "x": "" if a is None else round(a.x, 4), "y": "" if a is None else round(a.y, 4),
                          "z": "" if a is None else round(a.z, 4)})
     return rows

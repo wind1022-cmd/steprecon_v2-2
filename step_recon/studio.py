@@ -552,7 +552,8 @@ class Studio:
                           "params": [{"name": p["name"], "short": p["name"].split(".", 1)[-1],
                                       "base": round(self.base_values[p["name"]], 6),
                                       "value": round(current.get(p["name"], p["value"]), 6),
-                                      "unit": "deg" if p["kind"] == "angle" else "mm"} for p in f["params"]]})
+                                      "unit": "deg" if p["kind"] == "angle" else "" if p["kind"] == "flag" else "mm",
+                                      "flag": p["kind"] == "flag"} for p in f["params"]]})
         shape = P.result_shape(self.doc)
         out = {"loaded": True, "rev": self.rev, "mode": "edit", "selection": self.selection, "auto": self.auto, "info": self.info, "features": feats, "problems": P.problems(self.doc),
                "measure": self._measure(shape) if shape is not None else None,

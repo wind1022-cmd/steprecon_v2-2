@@ -25,7 +25,7 @@ import math
 import FreeCAD as App
 import Part
 
-from . import fc_tools
+from . import fc_tools, stretch
 
 TWO_PI = 2 * math.pi
 
@@ -418,6 +418,50 @@ def _edges_to_geometry(edges, loc):
     return geo
 
 
+def _straight_face(face, n, tol=1e-3):
+    """True if the face runs along n: its normal is square to n everywhere (planes, cylinders, extrusions along n)."""
+    u0, u1, v0, v1 = face.ParameterRange
+    for a in (0.15, 0.5, 0.85):
+        for b in (0.15, 0.5, 0.85):
+            try:
+                if abs(face.normalAt(u0 + (u1 - u0) * a, v0 + (v1 - v0) * b).dot(n)) > tol:
+                    return False
+            except Exception:
+                return False
+    return True
+
+
+def _rim_plan(shape, nb, i, n, thick):
+    """Where to cut the part so that the rim around flat end face i (chamfers, fillets) can move with it:
+    the position of the cutting plane along n, or None if the face is not an end of the part, has no rim, or the rim
+    is too deep. The plane lies a little below the lowest point of the rim, in the straight part of the walls."""
+    f = shape.Faces[i]
+    tf = n.dot(f.CenterOfMass)
+    bb = shape.BoundBox
+    c, big = bb.Center, bb.DiagonalLength + 1.0
+    try:        # an end face: nothing of the part lies beyond it
+        above = shape.common(Part.makeCylinder(big, 2 * big, c - n * (n.dot(c) - (tf + 1e-4)), n))
+        if above.Volume > 1e-9 * shape.Volume:
+            return None
+    except Exception:
+        return None
+    rim = {j for _, j in nb[i] if not _straight_face(shape.Faces[j], n)}
+    todo = list(rim)
+    while todo and len(rim) < 3000:
+        j = todo.pop()
+        for _, k in nb[j]:
+            if k != i and k not in rim and not _straight_face(shape.Faces[k], n):
+                rim.add(k)
+                todo.append(k)
+    if not rim or len(rim) >= 3000:
+        return None
+    depth = max(tf - n.dot(v.Point) for j in rim for v in shape.Faces[j].Vertexes)
+    gap = max(0.25 * depth, 0.05)
+    if depth < 1e-6 or depth + gap > 0.6 * thick:
+        return None
+    return tf - depth - gap
+
+
 def _surroundings(shape, nb, i, n):
     """How the faces around planar face i behave, seen from that face:
     "straight" - all of them run along the normal (planes square to it, cylinders parallel to it);
@@ -526,6 +570,7 @@ def add_face_moves(sess, report, limit=12, only=None):
         tip_before = body.Tip
         made_objs = []
         good = False
+        rim_only = False
         try:
             pad = body.newObject("PartDesign::Pad", "FaceMove")
             made_objs.append(pad.Name)
@@ -535,7 +580,12 @@ def add_face_moves(sess, report, limit=12, only=None):
             grew = pad.isValid() and abs((pad.Shape.Volume - before) - area * test) <= 2e-3 * area * test
             pad.Suppressed = True
             sess.doc.recompute()
-            if kind == "straight":
+            if kind == "land":
+                try:        # the outline of the land as sketch geometry: lines and arcs only
+                    _edges_to_geometry(face.OuterWire.Edges, lambda q: [q.x, q.y])
+                except ValueError:
+                    rim_only = True     # curved (spline) outline, e.g. gear flanks: no widened pocket can be sketched
+            if kind == "straight" or rim_only:
                 cut = body.newObject("PartDesign::Pocket", "FaceMoveIn")
                 made_objs.append(cut.Name)
                 cut.Profile = (anchor, [name])
@@ -573,6 +623,22 @@ def add_face_moves(sess, report, limit=12, only=None):
             good = grew and lo <= took <= hi and abs(body.Tip.Shape.Volume - before) <= 1e-9 * max(before, 1.0)
         except Exception:
             good = False
+        rim_plane = None
+        if good and kind == "land":      # the rim (chamfers, fillets) may be moved along: stretch the part under the face
+            try:
+                rim_plane = _rim_plan(shape, nb, i, n, thick)
+                if rim_plane is not None:
+                    v0 = shape.Volume
+                    for d in (test, -test):
+                        moved, sinfo = stretch.stretch(shape, n, rim_plane, d)
+                        want = sinfo["area"] * d
+                        if moved is None or abs((moved.Volume - v0) - want) > 2e-3 * abs(want):
+                            rim_plane = None
+                            break
+            except Exception:
+                rim_plane = None
+        if rim_only and rim_plane is None:
+            good = False        # a plain pocket of the face outline would leave the rim standing: not worth offering
         if not good:
             if only is not None:
                 report["skipped"].append(f"flat face at {_pt(face.CenterOfMass)}: moving it does not give a clean "
@@ -592,6 +658,13 @@ def add_face_moves(sess, report, limit=12, only=None):
         pad.addProperty("App::PropertyFloat", "SR_Thickness", "steprecon", "material behind the face at the start")
         pad.addProperty("App::PropertyString", "SR_Kind", "steprecon", "straight surroundings, or a land")
         pad.SR_Pair, pad.SR_Thickness, pad.SR_Kind = cut.Name, float(thick), kind
+        if rim_plane is not None:
+            pad.addProperty("App::PropertyBool", "SR_Rim", "steprecon", "the rim (chamfers, fillets) moves with the face")
+            pad.addProperty("App::PropertyFloat", "SR_Offset", "steprecon", "how far the face is moved (with the rim)")
+            pad.addProperty("App::PropertyFloat", "SR_RimPlane", "steprecon", "cutting plane position along the normal")
+            pad.addProperty("App::PropertyVector", "SR_RimNormal", "steprecon", "outward normal of the face")
+            pad.SR_Rim, pad.SR_Offset, pad.SR_RimPlane = True, 0.0, float(rim_plane)
+            pad.SR_RimNormal = App.Vector(n.x, n.y, n.z)
         sess._record(list(reversed(made_objs)), f"movable face {made} ({kind}, thickness {thick:g})")
     report["faces_made"] = made
     report["features"] += made

@@ -20,6 +20,10 @@ FEATURE_PROPS = {
 DIMENSIONS = ("Distance", "DistanceX", "DistanceY", "Radius", "Diameter", "Angle")
 
 
+_cache = {}
+_rim_error = [""]
+
+
 def _clean(label):
     return re.sub(r"[^A-Za-z0-9_]+", "_", label).strip("_") or "Feature"
 
@@ -55,14 +59,20 @@ def collect(doc):
             # a movable face: one number (the thickness behind it, or the offset if that is unknown) drives a
             # pad for moving out and a pocket for moving in
             cut = doc.getObject(o.SR_Pair)
+            rim = hasattr(o, "SR_RimPlane")
             off = 0.0
-            if not o.Suppressed:
+            if rim and o.SR_Rim:
+                off = float(o.SR_Offset)
+            elif not o.Suppressed:
                 off = float(o.Length)
             elif cut is not None and not cut.Suppressed:
                 off = -float(cut.Length)
             t0 = float(o.SR_Thickness)
-            add(f"{_clean(o.Label)}." + ("Thickness" if t0 > 0 else "Offset"), t0 + off, "length",
+            label = _clean(o.Label)
+            add(f"{label}." + ("Thickness" if t0 > 0 else "Offset"), t0 + off, "length",
                 obj=o.Name, pair=o.SR_Pair, t0=t0)
+            if rim:     # 1: the chamfers / fillets around the face move with it, 0: they stay where they are
+                add(f"{label}.WithRim", 1.0 if o.SR_Rim else 0.0, "flag", obj=o.Name, flag=True)
             continue
         if o.Name in movers:
             continue
@@ -103,17 +113,26 @@ def collect(doc):
 def apply(doc, params, values):
     """Set parameters by name ({name: number}; lengths in mm, angles in degrees). Unknown names raise KeyError."""
     by_name = {p["name"]: p for p in params}
-    for name, value in values.items():
+    # the "with rim" switches first: how a face is moved depends on them
+    for name, value in sorted(values.items(), key=lambda kv: 0 if by_name.get(kv[0], {}).get("flag") else 1):
         if name not in by_name:
             raise KeyError(f"unknown parameter {name!r}")
         p = by_name[name]
         obj = doc.getObject(p["obj"])
         unit = "deg" if p["kind"] == "angle" else "mm"
-        if "pair" in p:
+        if p.get("flag"):
+            obj.SR_Rim = float(value) > 0.5
+        elif "pair" in p:
             cut = doc.getObject(p["pair"])
             if p["t0"] > 0 and float(value) <= 0:
                 raise ValueError(f"{name} must be larger than 0")
             off = float(value) - p["t0"]
+            if hasattr(obj, "SR_RimPlane") and obj.SR_Rim:
+                obj.Suppressed, cut.Suppressed = True, True
+                obj.SR_Offset = off if abs(off) > 1e-9 else 0.0
+                continue
+            if hasattr(obj, "SR_RimPlane"):
+                obj.SR_Offset = 0.0
             obj.Suppressed, cut.Suppressed = not off > 1e-9, not off < -1e-9
             if off > 1e-9:
                 obj.Length = off
@@ -125,15 +144,46 @@ def apply(doc, params, values):
             setattr(obj, p["prop"], float(value))
 
 
+def _with_rim(shape, moves):
+    """The tip shape with the faces that carry their rim along moved (stretch.py). None if one cannot be moved."""
+    from . import stretch
+    key = (shape.hashCode(), round(shape.Volume, 6), tuple(
+        (o.Name, round(float(o.SR_Offset), 9), round(float(o.SR_RimPlane), 9)) for o in moves))
+    if key in _cache:
+        out, _rim_error[0] = _cache[key]
+        return out
+    out = shape
+    _rim_error[0] = ""
+    for o in moves:
+        nrm = o.SR_RimNormal
+        out, info = stretch.stretch(out, nrm, float(o.SR_RimPlane), float(o.SR_Offset))
+        if out is None:
+            _rim_error[0] = f"{_clean(o.Label)}: {info['error']}"
+            break
+    if len(_cache) > 8:
+        _cache.clear()
+    _cache[key] = (out, _rim_error[0])
+    return out
+
+
 def result_shape(doc):
-    """The solid(s) the document describes: the tip of every body."""
+    """The solid(s) the document describes: the tip of every body, with the faces moved whose rim goes along."""
     import Part
     shapes = []
+    _rim_error[0] = ""
     for b in doc.Objects:
         if b.TypeId == "PartDesign::Body":
             t = b.Tip if b.Tip is not None else b.BaseFeature
             if t is not None and not t.Shape.isNull():
-                shapes.append(t.Shape)
+                shape = t.Shape
+                inside = {x.Name for x in b.Group}
+                moves = [o for o in doc.Objects if hasattr(o, "SR_RimPlane") and o.Name in inside and o.SR_Rim
+                         and abs(float(o.SR_Offset)) > 1e-9]
+                if moves:
+                    shape = _with_rim(shape, moves)
+                    if shape is None:
+                        return None
+                shapes.append(shape)
     if not shapes:
         return None
     return shapes[0] if len(shapes) == 1 else Part.makeCompound(shapes)
@@ -147,7 +197,9 @@ def problems(doc):
             if not o.isValid():
                 bad.append(f"{o.Label}: {getattr(o, 'getStatusString', lambda: 'invalid')()}")
     s = result_shape(doc)
-    if s is None or s.isNull():
+    if _rim_error[0]:
+        bad.append(_rim_error[0])
+    elif s is None or s.isNull():
         bad.append("no solid")
     elif not s.isValid() or s.Volume <= 0:
         bad.append("the solid is not valid")

@@ -81,9 +81,11 @@ report("mesh is consistent", nv > 100 and len(m["normals"]) == len(m["positions"
 owned = {n: m["feature"].count(n) for n in set(m["feature"])}
 report("every face belongs to the feature that made it or would move it",
        {1, 2} <= set(owned) and all(v > 0 for v in owned.values()) and sum(owned.values()) == nv, str(owned))
-thick = sorted(p["base"] for f in feats if f["category"] == "face" for p in f["params"])
+thick = sorted(p["base"] for f in feats if f["category"] == "face" for p in f["params"] if not p.get("flag"))
+rims = sorted(f["kind"] for f in feats if f["category"] == "face" for p in f["params"] if p.get("flag"))
 sides = sorted(f["side"] for f in feats if f["category"] == "face")
 kinds = sorted(f["kind"] for f in feats if f["category"] == "face")
+report("the four sides (rounded corners around them) can carry their rim along, top and bottom have none", rims == ["land"] * 4)
 report("all six faces of the plate are movable", thick == [10.0, 10.0, 30.0, 30.0, 40.0, 40.0]
        and sides == ["+X", "+Y", "+Z", "-X", "-Y", "-Z"] and kinds == ["land"] * 4 + ["straight"] * 2, f"{thick} {sides} {kinds}")
 hole = next(f for f in feats if f["category"] == "hole")
