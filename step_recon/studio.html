@@ -534,7 +534,7 @@ function loaded(st){
   const i = S.info, np = S.features.reduce((a, f) => a + f.params.length, 0);
   $("empty").style.display = "none"; $("toolbar").style.display = "flex"; $("hint").style.display = "block";
   $("file").style.display = "flex"; $("fname").textContent = i.name;
-  $("chips").innerHTML = `<span class="chip ${i.identical ? "ok" : "warn"}">${i.identical ? "✓ 원본과 동일" : "원본과 차이 " + i.xor_pct + "%"}</span>
+  $("chips").innerHTML = `<span class="chip ${i.identical || i.near ? "ok" : "warn"}" ${i.near ? 'title="아주 작은 형상(0.1 mm 정도의 호와 그 모따기 등)을 만들지 못해 면 개수만 다릅니다"' : ""}>${i.identical ? "✓ 원본과 동일" : i.near ? "≈ 원본과 거의 동일 (XOR " + i.xor_pct + "%)" : "원본과 차이 " + i.xor_pct + "%"}</span>
     <span class="chip">피처 ${S.features.length}개</span><span class="chip">치수 ${np}개</span><span class="chip">분석 ${i.seconds}초</span>
     ${i.skipped.length ? `<span class="chip warn" title="${i.skipped.join("\n")}">소재에 남김 ${i.skipped.length}</span>` : ""}
     ${(i.warnings || []).length ? `<span class="chip warn" title="${i.warnings.map(w => w.text).join("\n")}">⚠ 주의 ${i.warnings.length}</span>` : ""}`;
@@ -752,7 +752,7 @@ async function makeDims(all){
   try{ const st = await post("/api/make", all ? {all: true} : {items: [...pick.chosen]}); loaded(st);
     const W = st.info.warnings || [];
     if(W.length) toast("주의: " + W.map(w => w.hole ? `Ø${fmt(w.hole)} 구멍 입구의 형상 일부를 인식하지 못해 지름을 바꿔도 따라가지 않습니다` : "구멍 입구의 모따기·필렛 일부를 다시 만들지 못해 원래 형상으로 남았습니다").join(" / "), 9000);
-    else if(st.info.auto_added) toast(`구멍 입구의 모따기·필렛 면 ${st.info.auto_added}개를 함께 치수로 만들었습니다`, 5000);
+    else if(st.info.auto_added) toast(`연결된 모따기·필렛 면 ${st.info.auto_added}개를 함께 치수로 만들었습니다 (구멍 입구, 또는 양 끝면 둘레)`, 6000);
     else if(st.info.skipped.length) toast("일부는 치수로 만들지 못해 원래 형상에 남겼습니다 (위쪽 표시에 마우스를 올려 보세요)", 5000); }
   catch(e){ toast("만들 수 없습니다: " + e.message, 6000); }
   watchProgress(false); busy(false);
@@ -762,7 +762,7 @@ async function removeSel(){
   if(!confirm(`고른 ${ids.length}개를 형상에서 없앱니다. 부품 형상 자체가 바뀌고, 만들어 둔 치수는 지워집니다. 계속할까요?\n(없앤 뒤 '없애기 취소'로 되돌릴 수 있습니다)`)) return;
   busy(true, "형상에서 없애는 중", ""); watchProgress(true);
   try{ const st = await post("/api/remove", {items: ids}); enterPick(st); const r = st.info.last_removed;
-    toast(`면 ${r.removed}개를 없앴습니다 · 부피 ${r.volume_pct > 0 ? "+" : ""}${r.volume_pct}%` + (r.failed ? ` · ${r.failed}개는 없애지 못했습니다` : "") + " · 위쪽에서 단순화된 STEP을 받을 수 있습니다", 8000); }
+    toast(`면 ${r.removed}개를 없앴습니다` + (r.added ? ` (연결된 끝면 모따기·필렛 ${r.added}개 포함)` : "") + ` · 부피 ${r.volume_pct > 0 ? "+" : ""}${r.volume_pct}%` + (r.failed ? ` · ${r.failed}개는 없애지 못했습니다` : "") + " · 위쪽에서 단순화된 STEP을 받을 수 있습니다", 8000); }
   catch(e){ toast("없앨 수 없습니다: " + e.message, 7000); }
   watchProgress(false); busy(false);
 }

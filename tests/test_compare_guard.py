@@ -31,24 +31,29 @@ def report(name, ok, detail=""):
 
 box = Part.makeBox(20, 10, 5)
 same = Part.makeBox(20, 10, 5)
-c = compare.compare(Wrapped(box, False), Wrapped(same, True))
+c = compare.compare(Wrapped(box, False), Wrapped(same, True), faces=False)
 report("identical shapes, one cut direction wrong -> sampled, converged",
        c["converged"] and c["xor_method"] == "sampled" and c["xor_pct"] == 0.0 and c["xor_boolean_pct_unreliable"] == 100.0
        and "extra_regions" not in c, str({k: c[k] for k in ("xor_pct", "xor_method", "converged")}))
 
 smaller = Part.makeBox(20, 10, 4)          # 20% of the reference is missing
-c = compare.compare(Wrapped(box, True), Wrapped(smaller, False))
+c = compare.compare(Wrapped(box, True), Wrapped(smaller, False), faces=False)
 report("different shapes, wrong cut -> sampled, not converged",
        not c["converged"] and c["xor_method"] == "sampled" and 15 < c["xor_pct"] < 25, f"xor={c['xor_pct']}")
 
 # sampling alone is too coarse to see a tiny difference; unequal volumes must still block convergence
 tiny = Part.makeBox(20, 10, 5).cut(Part.makeBox(1, 1, 1.2, App.Vector(0, 0, 0)))    # 0.12% removed, 3 more faces
-c = compare.compare(Wrapped(box, False), Wrapped(tiny, True))
+c = compare.compare(Wrapped(box, False), Wrapped(tiny, True), faces=False)
 report("wrong cut + volume differs -> never converged", not c["converged"], f"vol diff={c['volume_diff_pct']}%")
 
 c = compare.compare(box, same)
+report("the same faces -> identical at once, no booleans", c["converged"] and c["xor_method"] == "faces" and c["xor_pct"] == 0.0)
+c = compare.compare(box, same, faces=False)
 report("consistent booleans are left alone", c["converged"] and c["xor_method"] == "boolean"
        and "xor_coarse_check_pct" not in c)
+c = compare.compare(box, smaller)
+report("different faces are not claimed identical, quick mode gives a closeness figure", not c["converged"] and c["xor_method"] == "boolean"
+       and compare.compare(box, smaller, quick=True)["xor_method"] == "faces_unmatched" and compare.compare(box, smaller, quick=True)["xor_pct"] > 0)
 c = compare.compare(box, smaller)
 report("normal difference still reports regions", not c["converged"] and c["xor_method"] == "boolean"
        and len(c["missing_regions"]) == 1 and abs(c["xor_pct"] - 20) < 1e-3)

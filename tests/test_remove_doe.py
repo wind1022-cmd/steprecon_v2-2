@@ -72,7 +72,7 @@ report("every face can be picked (the rest as 'other')", sum(len(it["faces"]) fo
 code, r = call("/api/remove", {"items": grp[("fillet", 3.0)]})
 info = r.get("info", {})
 report("remove the fillets: part changed, candidates found again", code == 200 and r["mode"] == "pick" and r["can_undo"]
-       and info["last_removed"] == {"removed": 4, "failed": 0, "volume_pct": info["last_removed"]["volume_pct"]}
+       and {k: info["last_removed"][k] for k in ("removed", "failed", "added")} == {"removed": 4, "failed": 0, "added": 0}
        and info["last_removed"]["volume_pct"] > 0 and not any(g["kind"] == "fillet" for g in r["groups"])
        and info["faces"] == len(part.Faces) - 4, str(info.get("last_removed")))
 sim = os.path.join(st.dir, info["simplified"])

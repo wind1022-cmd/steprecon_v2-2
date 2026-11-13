@@ -13,6 +13,57 @@ def _v(p):
     return App.Vector(float(p[0]), float(p[1]), 0)
 
 
+_FLIP = []
+
+
+def chamfer2_flip():
+    """The FlipDirection with which a PartDesign two-distance chamfer puts `Size` on the first face of the edge (the one
+    Shape.ancestorsOfType lists first, which is how the suggestions are ordered). Measured once on a box: the area of
+    that face shrinks by (leg on it) x (edge length). Trying both orientations on the real part instead costs a full
+    comparison for the wrong one - minutes on a part with a thousand faces."""
+    if _FLIP:
+        return _FLIP[0]
+    answer = False
+    doc = None
+    try:
+        doc = App.newDocument("_chamfer2_probe")
+        body = doc.addObject("PartDesign::Body", "Body")
+        blank = doc.addObject("Part::Feature", "Blank")
+        box = Part.makeBox(10, 10, 10)
+        blank.Shape = box
+        doc.recompute()
+        body.BaseFeature = blank
+        doc.recompute()
+        e = next(x for x in box.Edges if all(abs(v.Point.z - 10) < 1e-9 for v in x.Vertexes) and abs(x.Length - 10) < 1e-9)
+        idx = next(i for i, x in enumerate(box.Edges, 1) if x.isSame(e))
+        f0 = box.ancestorsOfType(e, Part.Face)[0]
+        n0 = f0.normalAt(*f0.Surface.parameter(f0.CenterOfMass))
+        pos0 = n0.dot(f0.CenterOfMass)
+        feat = body.newObject("PartDesign::Chamfer", "C")
+        feat.Base = (body.BaseFeature, [f"Edge{idx}"])
+        feat.ChamferType = "Two distances"
+        feat.Size, feat.Size2 = 2.0, 0.5
+        for flip in (False, True):
+            feat.FlipDirection = flip
+            doc.recompute()
+            area = sum(f.Area for f in feat.Shape.Faces if type(f.Surface).__name__ == "Plane"
+                       and abs(abs(App.Vector(f.Surface.Axis).dot(n0)) - 1.0) < 1e-9
+                       and abs(n0.dot(f.Surface.Position) - pos0) < 1e-9)
+            if abs((100.0 - area) / 10.0 - 2.0) < 1e-6:       # the leg on the first face is `Size`
+                answer = flip
+                break
+    except Exception:
+        answer = False
+    finally:
+        if doc is not None:
+            try:
+                App.closeDocument(doc.Name)
+            except Exception:
+                pass
+    _FLIP.append(answer)
+    return answer
+
+
 class Session:
     def __init__(self, ref_shape, name="Recon"):
         self.ref = ref_shape
@@ -752,6 +803,53 @@ class Session:
         feat.Size, feat.Size2, feat.FlipDirection = float(size), float(size2), bool(flip)
         return self._finish(feat, [feat.Name], f"chamfer {size} x {size2} flip={flip} edges={list(edges)}")
 
+    def _accel(self):
+        """Bounding boxes of the reference's faces and edges: tuples (xmin, xmax, ymin, ymax, zmin, zmax, object, number).
+        Asking the whole reference for the nearest face of every edge (distToShape on a compound) took 20-40 ms an edge
+        on a part with a thousand faces; the few faces whose box is near the point take a fraction of a millisecond."""
+        acc = getattr(self, "_acc", None)
+        if acc is None:
+            def box(k, o):
+                b = o.BoundBox
+                return (b.XMin, b.XMax, b.YMin, b.YMax, b.ZMin, b.ZMax, o, k)
+            acc = self._acc = {"edges": [box(k, e) for k, e in enumerate(self.ref.Edges)],
+                               "faces": [box(k, f) for k, f in enumerate(self.ref.Faces)]}
+        return acc
+
+    @staticmethod
+    def _boxes_near(items, p, r):
+        x, y, z = p.x, p.y, p.z
+        return [it for it in items if it[0] - r <= x <= it[1] + r and it[2] - r <= y <= it[3] + r
+                and it[4] - r <= z <= it[5] + r]
+
+    def _nearest_ref_face(self, p):
+        """(distance, face) of the reference face nearest to point p; (inf, None) if there is none."""
+        v = Part.Vertex(p)
+        faces = self._accel()["faces"]
+        for r in (1.0, 6.0, 1e9):
+            best = (float("inf"), None)
+            for it in self._boxes_near(faces, p, r):
+                try:
+                    d = it[6].distToShape(v)[0]
+                except Exception:
+                    continue
+                if d < best[0]:
+                    best = (d, it[6])
+            if best[1] is not None and best[0] <= r:
+                return best
+        return float("inf"), None
+
+    def _in_reference(self, p, tol=1e-4):
+        """Does one of the reference's edges pass through point p?"""
+        v = Part.Vertex(p)
+        for it in self._boxes_near(self._accel()["edges"], p, tol):
+            try:
+                if it[6].distToShape(v)[0] < tol:
+                    return True
+            except Exception:
+                return True
+        return False
+
     def _dress_hint(self, tip, e, mid):
         """For a sharp edge of the current solid that the reference does not have: is the reference rounded or
         bevelled there, and by how much? Returns {"fillet": r} / {"chamfer": size} or None.
@@ -760,12 +858,10 @@ class Session:
         try:
             # distance to the reference's SURFACE: at a concave edge the corner point lies inside the reference,
             # where the distance to the solid itself would be zero
-            if getattr(self, "_ref_faces", None) is None:
-                self._ref_faces = Part.Compound(self.ref.Faces)
-            d, _, info = self._ref_faces.distToShape(Part.Vertex(mid))
-            if d < 1e-5 or not info or info[0][0] != "Face":
+            d, rface = self._nearest_ref_face(mid)
+            if d < 1e-5 or rface is None:
                 return None
-            kind = type(self.ref.Faces[info[0][1]].Surface).__name__
+            kind = type(rface.Surface).__name__
             faces = tip.ancestorsOfType(e, Part.Face)
             t = math.pi / 2
             if len(faces) == 2:
@@ -776,7 +872,7 @@ class Session:
             if kind in ("Cylinder", "Toroid", "Sphere"):
                 return {"fillet": round(d / (1.0 / math.sin(t / 2) - 1.0), 2)}
             if True:        # plane, cone, or a ruled / spline strip along a curved edge: a chamfer if anything
-                legs = self._chamfer_legs(self.ref.Faces[info[0][1]], faces, mid) if len(faces) == 2 else None
+                legs = self._chamfer_legs(rface, faces, mid) if len(faces) == 2 else None
                 if legs and abs(legs[0] - legs[1]) > max(1e-3, 0.02 * max(legs)):
                     return {"chamfer2": [round(legs[0], 3), round(legs[1], 3)]}
                 return {"chamfer": round(d / math.cos(t / 2), 2)}
@@ -811,8 +907,6 @@ class Session:
         s = self._tip_shape()
         if s is None:
             return {"ok": False, "error": "no solid yet"}
-        if getattr(self, "_ref_edges", None) is None:
-            self._ref_edges = Part.Compound(self.ref.Edges)
         out = []
         for i, e in enumerate(s.Edges, 1):
             t = type(e.Curve).__name__
@@ -822,7 +916,7 @@ class Session:
                 continue
             mid = e.valueAt((e.FirstParameter + e.LastParameter) / 2.0)
             try:
-                in_ref = self._ref_edges.distToShape(Part.Vertex(mid))[0] < 1e-4
+                in_ref = self._in_reference(mid)
             except Exception:
                 in_ref = True
             if only_missing and in_ref:
@@ -846,12 +940,12 @@ class Session:
                            "usually belongs to a wrong or missing feature")
         return res
 
-    def compare(self):
-        """Compare ALL bodies together against the reference."""
+    def compare(self, quick=False):
+        """Compare ALL bodies together against the reference (quick: see compare.compare)."""
         s = self.result_shape()
         if s is None:
             return {"ok": False, "error": "no solid yet"}
-        r = cmp_mod.compare(self.ref, s)
+        r = cmp_mod.compare(self.ref, s, quick=quick)
         r["ok"] = True
         if len(self.bodies) > 1 or r["ref_solids"] > 1:
             r["bodies"] = len(self.bodies)

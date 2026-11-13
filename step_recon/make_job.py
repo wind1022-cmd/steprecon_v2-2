@@ -40,13 +40,14 @@ def main(path):
         if len(ref.Solids) == 1 and ref.ShapeType != "Solid":
             ref = ref.Solids[0]
         say(p=0.0, t=f"면 {len(job['remove'])}개 없애는 중")
-        new, done, failed = machined.remove_faces(ref, job["remove"], lambda f, i, n: say(
+        res = machined.remove_faces_ex(ref, job["remove"], lambda f, i, n: say(
             p=0.05 + 0.8 * f, t=f"한꺼번에는 안 되어 부분별로 없애는 중 {i}/{n}"))
+        new, done, failed = res["shape"], res["done"], res["failed"]
         if done:
             new.exportBrep(job["out"])
             new.exportStep(job["step"])
             say(p=0.9, t="바꿀 수 있는 후보 다시 찾는 중")
-        say(done=True, removed=done, failed=failed, faces=len(new.Faces), volume=new.Volume,
+        say(done=True, removed=done, failed=failed, added=res["added"], method=res["method"], faces=len(new.Faces), volume=new.Volume,
             cands=machined.scan(new) if done else None)
         return
 
@@ -76,7 +77,7 @@ def main(path):
     say(stage="compare", t="원본과 비교하는 중")
     c = sess.compare()
     say(done=True, report=json.loads(json.dumps(report, default=str)), sketches=json.loads(
-        json.dumps(saved.get("sketches", {}), default=str)), converged=bool(c.get("converged")), xor_pct=c.get("xor_pct"))
+        json.dumps(saved.get("sketches", {}), default=str)), converged=bool(c.get("converged")), near=bool(c.get("near")), xor_pct=c.get("xor_pct"))
 
 
 if __name__ == "__main__":

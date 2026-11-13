@@ -5,6 +5,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import urllib.error
 import urllib.request
 
@@ -39,12 +40,17 @@ ids = [0]
 
 
 def http(path, data=None, headers=None):
-    req = urllib.request.Request(base + path, data=data, method="POST" if data is not None else "GET", headers=headers or {})
-    try:
-        with urllib.request.urlopen(req, timeout=300) as r:
-            return r.status, r.read()
-    except urllib.error.HTTPError as e:
-        return e.code, e.read()
+    for attempt in range(4):        # a connection dropped right after the process started (seen twice in 30 runs)
+        req = urllib.request.Request(base + path, data=data, method="POST" if data is not None else "GET", headers=headers or {})
+        try:
+            with urllib.request.urlopen(req, timeout=300) as r:
+                return r.status, r.read()
+        except urllib.error.HTTPError as e:
+            return e.code, e.read()
+        except (ConnectionError, urllib.error.URLError, OSError):
+            if attempt == 3:
+                raise
+            time.sleep(0.3)
 
 
 def rpc(method, params=None, notify=False):

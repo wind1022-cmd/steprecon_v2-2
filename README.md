@@ -47,13 +47,14 @@ AI는 프로그램의 기능 13가지만 호출하고, 형상은 프로그램이
 | `step_recon/machined.py` | 구멍·필렛·모따기·평면을 찾아 피처로 분리 |
 | `step_recon/cpu.py` | CPU 코어 수와 우선순위 설정 |
 | `step_recon/params.py, param_map.py` | 치수 이름과 값, 파라미터 지도 |
+| `step_recon/sharpen.py` | 기어처럼 밀어낸 형상의 필렛·모따기를 단면 윤곽에서 정확히 없애기 |
 | `step_recon/stretch.py` | 면을 움직일 때 둘레 모따기·필렛을 함께 옮기는 형상 연산 |
 | `step_recon/fc_tools.py, constrain.py, compare.py, analyze.py` | FreeCAD 모델 작성, 스케치 구속, 원본 비교, 형상 읽기 |
 | `mcp.cmd / mcp_server.py, step_recon/mcp.py` | MCP 서버 |
 | `step_recon/tools.py` | AI가 호출하는 기능 13가지 |
 | `step_recon/chat.py, llm.py` | AI 대화 탭과 모델 연결 |
 
-테스트: `.\fc.cmd run_tests.py` (18개 파일, 인터넷과 AI 모델 불필요)
+테스트: `.\fc.cmd run_tests.py` (19개 파일, 인터넷과 AI 모델 불필요)
 
 ## 한계
 - 피처가 되는 것은 원통 구멍, 일정 반지름 필렛, 모따기(같은 길이·두 거리), 평면 이동입니다. 그 밖의 형상은 고정된 소재에 남습니다.

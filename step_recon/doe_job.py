@@ -20,11 +20,14 @@ def say(msg):
 
 
 def measure(shape):
+    from step_recon import compare
     bb = shape.BoundBox
     solids = shape.Solids or [shape]
-    vol = sum(s.Volume for s in solids) or 1e-12
-    c = [sum(getattr(s.CenterOfMass, ax) * s.Volume for s in solids) / vol for ax in "xyz"]
-    return {"volume": round(vol, 4), "area": round(shape.Area, 4), "cog_x": round(c[0], 4), "cog_y": round(c[1], 4),
+    vol, area, _ = compare.reliable_measure(shape)
+    vol = vol or 1e-12
+    vsum = sum(s.Volume for s in solids) or 1e-12      # weights of the centre of gravity: the same figures as its integration
+    c = [sum(getattr(s.CenterOfMass, ax) * s.Volume for s in solids) / vsum for ax in "xyz"]
+    return {"volume": round(vol, 4), "area": round(area, 4), "cog_x": round(c[0], 4), "cog_y": round(c[1], 4),
             "cog_z": round(c[2], 4), "size_x": round(bb.XLength, 4), "size_y": round(bb.YLength, 4),
             "size_z": round(bb.ZLength, 4)}
 

@@ -25,7 +25,7 @@ import math
 import FreeCAD as App
 import Part
 
-from . import fc_tools, stretch
+from . import fc_tools, sharpen, stretch
 
 TWO_PI = 2 * math.pi
 
@@ -180,17 +180,48 @@ def find_blends(shape):
     return groups
 
 
-def _defeature(shape, face_ids):
-    """Shape without those faces (neighbours extended), or None if the kernel cannot do it cleanly."""
+def _sane(old, new):
+    """Taking small features off must not blow the part up or move its bounding box: the kernel sometimes returns a
+    solid that passes isValid() and is garbage (seen: 8 times the volume after minutes of work)."""
     try:
-        out = shape.defeaturing([shape.Faces[i] for i in face_ids])
+        if new.isNull() or not new.isValid() or new.Volume <= 0:
+            return False
+        bb, nb_ = old.BoundBox, new.BoundBox
+        slack = 0.05 * bb.DiagonalLength
+        if (nb_.XMin < bb.XMin - slack or nb_.XMax > bb.XMax + slack or nb_.YMin < bb.YMin - slack
+                or nb_.YMax > bb.YMax + slack or nb_.ZMin < bb.ZMin - slack or nb_.ZMax > bb.ZMax + slack):
+            return False
+        return new.Volume <= bb.XLength * bb.YLength * bb.ZLength * (1 + 1e-6) + 1e-6
+    except Exception:
+        return False
+
+
+def _defeature(shape, face_ids):
+    """Shape without those faces, or None if that cannot be done cleanly. Parts that are an extrusion with features on
+    their ends (gears, splines, flanges) are rebuilt from their outline (sharpen.py): exact, a second instead of
+    minutes. The faces that had to go with the picked ones (the rim of the ends) are left in _defeature.extra.
+    Anything else goes to the kernel's defeaturing, and its answer is checked."""
+    _defeature.extra = []
+    faces = shape.Faces
+    try:
+        new, info = sharpen.rebuild_prism(shape, face_ids, faces)
+    except Exception:
+        new, info = None, ""
+    if new is not None:
+        _defeature.extra = sorted(set(info["removed"]) - set(face_ids))
+        return new
+    try:
+        out = shape.defeaturing([faces[i] for i in face_ids])
     except Exception:
         return None
     if out.isNull() or not out.isValid() or len(out.Solids) != len(shape.Solids) or len(out.Faces) >= len(shape.Faces):
         return None
-    if abs(out.Volume - shape.Volume) > 0.2 * shape.Volume:      # a dress-up never changes the volume that much
+    if not _sane(shape, out) or abs(out.Volume - shape.Volume) > 0.2 * shape.Volume:    # a dress-up never changes the volume that much
         return None
     return out.Solids[0] if len(out.Solids) == 1 else out
+
+
+_defeature.extra = []
 
 
 # ------------------------------------------------------------------ progress
@@ -335,20 +366,17 @@ def _dress(sess, report):
         first = max((e["suggest"] for e in todo), key=lambda s: max(list(s.values())[0]) if isinstance(
             list(s.values())[0], list) else list(s.values())[0])
         ids = [e["edge"] for e in todo if e["suggest"] == first]
-        before = sess.compare()["xor_pct"]
+        before = sess.compare(quick=True)["xor_pct"]       # quick: faces matched one to one, no booleans
         kind, size = list(first.items())[0]
-        if kind == "chamfer2":      # which leg goes on which face depends on the edge's direction: try both
-            tried = []
-            for flip in (False, True):
-                r = sess.chamfer2(ids, size[0], size[1], flip)
-                if r.get("ok"):
-                    tried.append((sess.compare()["xor_pct"], flip))
-                    sess.undo()
-            good = [t for t in tried if t[0] < before - 1e-9]
-            r = sess.chamfer2(ids, size[0], size[1], min(good)[1]) if good else {"ok": False}
+        if kind == "chamfer2":      # the legs are listed for the edge's first / second face: the measured orientation
+            flip = fc_tools.chamfer2_flip()
+            r = sess.chamfer2(ids, size[0], size[1], flip)
+            if r.get("ok") and not sess.compare(quick=True)["xor_pct"] < before - 1e-9:
+                sess.undo()                 # not better: the other orientation, in case the convention differs here
+                r = sess.chamfer2(ids, size[0], size[1], not flip)
         else:
             r = sess.fillet(ids, size) if kind == "fillet" else sess.chamfer(ids, size)
-        if r.get("ok") and sess.compare()["xor_pct"] < before - 1e-9:
+        if r.get("ok") and sess.compare(quick=True)["xor_pct"] < before - 1e-9:
             feat = sess.doc.getObject(r["feature"])
             feat.Label = (f"Fillet_R{size:g}" if kind == "fillet" else f"Chamfer_{size:g}" if kind == "chamfer"
                           else f"Chamfer_{max(size):g}x{min(size):g}") + (f"_x{len(ids)}" if len(ids) > 1 else "")
@@ -431,11 +459,12 @@ def _straight_face(face, n, tol=1e-3):
     return True
 
 
-def _rim_plan(shape, nb, i, n, thick):
+def _rim_plan(shape, nb, i, n, thick, faces=None):
     """Where to cut the part so that the rim around flat end face i (chamfers, fillets) can move with it:
     the position of the cutting plane along n, or None if the face is not an end of the part, has no rim, or the rim
     is too deep. The plane lies a little below the lowest point of the rim, in the straight part of the walls."""
-    f = shape.Faces[i]
+    faces = faces if faces is not None else shape.Faces
+    f = faces[i]
     tf = n.dot(f.CenterOfMass)
     bb = shape.BoundBox
     c, big = bb.Center, bb.DiagonalLength + 1.0
@@ -445,42 +474,46 @@ def _rim_plan(shape, nb, i, n, thick):
             return None
     except Exception:
         return None
-    rim = {j for _, j in nb[i] if not _straight_face(shape.Faces[j], n)}
+    rim = {j for _, j in nb[i] if not _straight_face(faces[j], n)}
     todo = list(rim)
     while todo and len(rim) < 3000:
         j = todo.pop()
         for _, k in nb[j]:
-            if k != i and k not in rim and not _straight_face(shape.Faces[k], n):
+            if k != i and k not in rim and not _straight_face(faces[k], n):
                 rim.add(k)
                 todo.append(k)
     if not rim or len(rim) >= 3000:
         return None
-    depth = max(tf - n.dot(v.Point) for j in rim for v in shape.Faces[j].Vertexes)
+    depth = max(tf - n.dot(v.Point) for j in rim for v in faces[j].Vertexes)
     gap = max(0.25 * depth, 0.05)
     if depth < 1e-6 or depth + gap > 0.6 * thick:
         return None
     return tf - depth - gap
 
 
-def _surroundings(shape, nb, i, n):
+def _surroundings(shape, nb, i, n, faces=None, want_reach=True):
     """How the faces around planar face i behave, seen from that face:
     "straight" - all of them run along the normal (planes square to it, cylinders parallel to it);
     "land"     - none rises above the face (chamfers, fillets, drafted or stepped walls falling away from it);
     None       - something rises above it without being straight: the face cannot simply be moved.
-    For a land also the widest in-plane reach of the non-straight neighbours (how far a deeper cut must extend)."""
-    f = shape.Faces[i]
+    For a land also the widest in-plane reach of the non-straight neighbours (how far a deeper cut must extend);
+    only computed with want_reach (it is slow, and the scan does not need it)."""
+    faces = faces if faces is not None else shape.Faces
+    f = faces[i]
     p0 = f.CenterOfMass
     straight, land, reach = True, True, 0.0
     for _, j in nb[i]:
-        g = shape.Faces[j]
+        g = faces[j]
         gs = g.Surface
         kind = type(gs).__name__
         if kind == "Plane":
             ok = abs(App.Vector(gs.Axis).normalize().dot(n)) < 1e-6
         elif kind == "Cylinder":
             ok = App.Vector(gs.Axis).cross(n).Length < 1e-6
-        else:
+        elif kind in ("Cone", "Sphere", "Toroid"):
             ok = False
+        else:
+            ok = sharpen.straight_face(g, n)       # splines extruded along n (gear flanks ...)
         if ok:
             continue
         straight = False
@@ -488,7 +521,7 @@ def _surroundings(shape, nb, i, n):
         if any((q - p0).dot(n) > 1e-6 for q in pts):
             land = False
             break
-        for q in pts:
+        for q in (pts if want_reach else ()):
             flat = q - n * (q - p0).dot(n)
             try:
                 reach = max(reach, f.distToShape(Part.Vertex(flat))[0])
@@ -680,6 +713,7 @@ def _attempt(ref, blend_faces, exclude_holes, only_holes=None):
         target = _defeature(ref, blend_faces)
         if target is None:
             return None, report, False
+        report["auto_added"] = list(_defeature.extra)   # faces that had to go with the picked ones (rim of the ends)
     sess = fc_tools.Session(ref)
     failed = _cut_holes(sess, target, report, exclude_holes, only_holes)
     if failed:
@@ -689,7 +723,11 @@ def _attempt(ref, blend_faces, exclude_holes, only_holes=None):
         _dress(sess, report)
     c = sess.compare()
     report["_excluded_holes"] = exclude_holes
-    return sess, report, bool(c.get("converged"))
+    if c.get("near") and not c.get("converged"):
+        report["skipped"].append(f"tiny details were not reproduced: the result differs from the file by "
+                                 f"{c.get('xor_pct')}% of the volume ({c.get('ref_faces')} faces in the file, "
+                                 f"{c.get('new_faces')} here)")
+    return sess, report, bool(c.get("converged") or c.get("near"))
 
 
 def build(ref, progress=None):
@@ -765,18 +803,19 @@ def _build(ref, blends=None, only_holes=None, plane_faces=None):
 
 
 # ------------------------------------------------------------------ pick what to treat
-def _chamfer_size(shape, i, nb):
+def _chamfer_size(shape, i, nb, faces=None):
     """Leg lengths (larger, smaller) of a chamfer face. In the triangle corner - leg 1 - leg 2 the chamfer is the side
     of width w, its angles at the two legs are the angles a1, a2 between the chamfer and the neighbours, so
     leg on neighbour 1 = w sin(a2) / sin(a1 + a2) and the other way round."""
-    f = shape.Faces[i]
+    faces = faces if faces is not None else shape.Faces
+    f = faces[i]
     long_edges = sorted(f.Edges, key=lambda e: -e.Length)[:2]
     angles = []
     for x in long_edges:
         for e, j in nb[i]:
             if e.isSame(x):
                 p = _edge_mid(e)
-                n1, n2 = _normal_at(f, p), _normal_at(shape.Faces[j], p)
+                n1, n2 = _normal_at(f, p), _normal_at(faces[j], p)
                 if n1 is not None and n2 is not None:
                     angles.append(n1.getAngle(n2))
                 break
@@ -793,11 +832,12 @@ def _side(n):
     return (("+" if n[k] > 0 else "-") + "XYZ"[k]) if abs(n[k]) > 0.999 else ""
 
 
-def _odd_rim(shape, nb, hole_faces, known):
+def _odd_rim(shape, nb, hole_faces, known, faces=None):
     """Faces touching a hole that are neither flat, nor another cylinder, nor a recognised fillet / chamfer: a rim
     shape the hole's diameter cannot carry along (it stays as in the file)."""
+    faces = faces if faces is not None else shape.Faces
     return {j for i in hole_faces for _, j in nb[i]
-            if j not in known and j not in hole_faces and type(shape.Faces[j].Surface).__name__ not in ("Plane", "Cylinder")}
+            if j not in known and j not in hole_faces and type(faces[j].Surface).__name__ not in ("Plane", "Cylinder")}
 
 
 def scan(ref):
@@ -809,6 +849,7 @@ def scan(ref):
     groups: same kind and size together {"id", "kind", "size", "items": [ids]}; flat faces are not grouped.
     owner : ref face index -> item number (1-based position in items), 0 = not a candidate."""
     nb = _neighbours(ref)
+    faces = ref.Faces           # one list: every ref.Faces[i] builds the whole list again (tens of ms on big parts)
     items, groups = [], {}
 
     def add(item, gkey=None):
@@ -835,20 +876,20 @@ def scan(ref):
             if key[0] == "fillet":
                 item["size"] = round(key[1], 4)
             else:
-                big, small = _chamfer_size(ref, i, nb)
+                big, small = _chamfer_size(ref, i, nb, faces)
                 item["size"] = round(big, 3)
                 if big - small > max(1e-3, 0.02 * big):       # two different distances
                     item["size2"] = round(small, 3)
                 else:
                     item["size"] = round((big + small) / 2, 3)
             add(item, (key[0], item["size"], item.get("size2")))
-    for i, f in enumerate(ref.Faces):
+    for i, f in enumerate(faces):
         if i in blend_faces or type(f.Surface).__name__ != "Plane" or not nb[i]:
             continue
         u0, u1, v0, v1 = f.ParameterRange
         n = f.normalAt((u0 + u1) / 2, (v0 + v1) / 2)
         try:
-            kind, _ = _surroundings(ref, nb, i, n)
+            kind, _ = _surroundings(ref, nb, i, n, faces, want_reach=False)
         except Exception:
             kind = None
         if kind:
@@ -857,13 +898,13 @@ def scan(ref):
                  "surround": kind, "at": [round(c.x, 3), round(c.y, 3), round(c.z, 3)]})
     for it in items:
         if it["kind"] == "hole":
-            odd = _odd_rim(ref, nb, it["faces"], blend_faces)
+            odd = _odd_rim(ref, nb, it["faces"], blend_faces, faces)
             if odd:
                 it["rim_unknown"] = len(odd)
                 g = next(g for g in groups.values() if it["id"] in g["items"])
                 g["rim_unknown"] = g.get("rim_unknown", 0) + len(odd)
     taken = {i for it in items for i in it["faces"]}
-    for i, f in enumerate(ref.Faces):       # every other face: cannot become a dimension, but can be removed
+    for i, f in enumerate(faces):       # every other face: cannot become a dimension, but can be removed
         if i not in taken:
             add({"id": f"f{i}", "kind": "other", "faces": [i], "size": round(f.Area, 3)})
     owner = [0] * len(ref.Faces)
@@ -882,17 +923,56 @@ def _take_off(shape, faces):
     except Exception:
         return None
     if out.isNull() or not out.isValid() or len(out.Solids) != len(shape.Solids) or len(out.Faces) >= len(shape.Faces) \
-            or out.Volume <= 0:
+            or not _sane(shape, out):
         return None
     return out.Solids[0] if len(out.Solids) == 1 else out
 
 
 def remove_faces(shape, face_ids, progress=None):
     """Remove faces from the part - fillets, chamfers, holes, small details - letting the neighbours close the gap.
-    All at once if the kernel can; otherwise connected patches, then single faces, in repeated passes (a face that
-    resists at first often goes once its neighbours are gone), keeping whatever works.
-    Returns (new shape, number of faces removed, number that could not be removed)."""
+    Returns (new shape, number of faces removed, number that could not be removed); see remove_faces_ex."""
+    res = remove_faces_ex(shape, face_ids, progress)
+    return res["shape"], res["done"], res["failed"]
+
+
+def remove_faces_ex(shape, face_ids, progress=None):
+    """Remove faces from the part - fillets, chamfers, holes, small details. Three routes, the first that works:
+    the outline route (sharpen.py: parts that are an extrusion with features on the ends - exact, fast; it also takes
+    the whole rim of an end along, `added` faces more than were picked), the kernel's defeaturing for everything at
+    once, then connected patches and single faces in repeated passes. Every answer of the kernel is checked (_sane).
+    -> {"shape", "done", "failed", "added", "method"}"""
     ids = sorted(set(int(i) for i in face_ids))
+    if not ids:
+        return {"shape": shape, "done": 0, "failed": 0, "added": 0, "method": ""}
+    faces = shape.Faces
+    try:
+        new, info = sharpen.rebuild_prism(shape, ids, faces)
+    except Exception:
+        new, info = None, ""
+    if new is not None:
+        gone = set(info["removed"])
+        added = len(gone - set(ids))
+        left = [i for i in ids if i not in gone]
+        if not left:
+            return {"shape": new, "done": len(gone & set(ids)), "failed": 0, "added": added, "method": "outline"}
+        # faces the outline route does not handle: the kernel way, on the new part (found again by position)
+        marks = [(faces[i].CenterOfMass, faces[i].Area) for i in left]
+        rest = []
+        for c, a in marks:
+            hit = next((j for j, f in enumerate(new.Faces) if abs(f.Area - a) <= 1e-6 * max(a, 1.0)
+                        and f.CenterOfMass.distanceToPoint(c) < 1e-5), None)
+            if hit is not None:
+                rest.append(hit)
+        out, done, failed = _remove_generic(new, rest, progress)
+        return {"shape": out, "done": len(gone & set(ids)) + done, "failed": failed + len(left) - len(rest),
+                "added": added, "method": "outline+kernel"}
+    out, done, failed = _remove_generic(shape, ids, progress)
+    return {"shape": out, "done": done, "failed": failed, "added": 0, "method": "kernel"}
+
+
+def _remove_generic(shape, ids, progress=None):
+    """The kernel route of remove_faces_ex: (new shape, removed, not removed)."""
+    ids = sorted(set(ids))
     if not ids:
         return shape, 0, 0
     out = _take_off(shape, [shape.Faces[i] for i in ids])
@@ -977,7 +1057,7 @@ def build_selected(ref, holes=(), blend_faces=(), planes=(), progress=None):
         blends = {k: sorted(i for i in ids if i in chosen) for k, ids in found.items()}
         blends = {k: v for k, v in blends.items() if v}
         sess, report = _build(ref, blends, holes, sorted(set(planes)))
-        report["auto_added"] = sorted(added)
+        report["auto_added"] = sorted(set(added) | set(report.get("auto_added", [])))
         refused = [s for s in report["skipped"] if "fillets/chamfers" in s]
         if added and refused:
             warnings.append({"hole": None, "faces": 0, "text": "some fillets/chamfers at the rim of a chosen hole could "

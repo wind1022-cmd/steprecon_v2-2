@@ -25,7 +25,7 @@ from urllib.parse import parse_qs, urlparse
 import FreeCAD as App
 import Part
 
-from . import analyze, cpu, chat as chat_mod, machined, mcp, param_map, params as P
+from . import analyze, compare as compare_mod, cpu, chat as chat_mod, machined, mcp, param_map, params as P
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PALETTE = {"hole": "#3b82f6", "fillet": "#10b981", "chamfer": "#f59e0b", "face": "#a855f7", "other": "#64748b"}
@@ -275,6 +275,7 @@ class Studio:
         self.aliases, self.highlight, self.plan = {}, 0, None
         self.info = {"name": name, "base": base, "folder": self.dir, "seconds": round(time.time() - t0, 1),
                      "identical": bool(cmp_.get("converged")), "xor_pct": cmp_.get("xor_pct"),
+                     "near": bool(cmp_.get("near")) and not cmp_.get("converged"),
                      "faces": len(ref.Faces), "skipped": report.get("skipped", []),
                      "counts": {"holes": report["holes_made"], "fillets": report["fillets_made"],
                                 "chamfers": report["chamfers_made"], "faces": report.get("faces_made", 0)},
@@ -374,7 +375,8 @@ class Studio:
             self.selection, self.auto = [], False
             self.info = dict(self.info, faces=len(ref.Faces), built=False, simplified=step,
                              removed_total=self.info.get("removed_total", 0) + res["removed"],
-                             last_removed={"removed": res["removed"], "failed": res["failed"],
+                             last_removed={"removed": res["removed"], "failed": res["failed"], "added": res.get("added", 0),
+                                           "method": res.get("method", ""),
                                            "volume_pct": round((ref.Volume - before) / before * 100, 3) if before else 0.0})
             self.aliases, self.highlight, self.plan = {}, 0, None
             self.bump()
@@ -566,9 +568,11 @@ class Studio:
     def _measure(shape):
         bb = shape.BoundBox
         solids = shape.Solids or [shape]
-        vol = sum(s.Volume for s in solids) or 1e-12
-        c = [sum(getattr(s.CenterOfMass, ax) * s.Volume for s in solids) / vol for ax in "xyz"]
-        return {"volume": round(vol, 4), "area": round(shape.Area, 4), "cog_x": round(c[0], 4),
+        vol, area, fixed = compare_mod.reliable_measure(shape)
+        vol = vol or 1e-12
+        vsum = sum(s.Volume for s in solids) or 1e-12      # weights of the centre of gravity: the same figures as its integration
+        c = [sum(getattr(s.CenterOfMass, ax) * s.Volume for s in solids) / vsum for ax in "xyz"]
+        return {"volume": round(vol, 4), "area": round(area, 4), "cog_x": round(c[0], 4),
                 "cog_y": round(c[1], 4), "cog_z": round(c[2], 4), "size_x": round(bb.XLength, 4),
                 "size_y": round(bb.YLength, 4), "size_z": round(bb.ZLength, 4)}
 
