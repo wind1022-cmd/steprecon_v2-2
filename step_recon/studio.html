@@ -219,6 +219,25 @@ td.bad{color:var(--bad);text-align:left;white-space:normal}
 .presets button:hover{border-color:var(--accent);color:var(--accent)}
 .chk{display:flex;align-items:center;gap:7px;font-size:12.5px;cursor:pointer}
 .pop small{display:block;color:var(--faint);font-size:11.5px;margin-top:9px}
+.lhead{display:flex;align-items:center;gap:8px}
+.lhead h2{flex:1}
+.pickbar{flex-wrap:wrap}
+.pickbar span{flex-basis:100%}
+.grp{display:flex;align-items:center;gap:10px;padding:9px 10px;border:1px solid var(--line);border-radius:10px;margin-bottom:6px;cursor:pointer;user-select:none;background:var(--panel)}
+.grp:hover{border-color:var(--c)}
+.grp.on{border-color:var(--c);background:color-mix(in srgb,var(--c) 8%,var(--panel))}
+.grp b{display:block;font-weight:600;line-height:1.25}
+.grp small{color:var(--mut);font-size:11.5px}
+.cb{width:18px;height:18px;border-radius:5px;border:1.5px solid var(--faint);flex:none;display:grid;place-items:center;position:relative}
+.cb.full{background:var(--c);border-color:var(--c)}
+.cb.full::after{content:"";width:5px;height:9px;border:solid #fff;border-width:0 2px 2px 0;transform:translateY(-1px) rotate(45deg)}
+.cb.part{border-color:var(--c)}
+.cb.part::after{content:"";width:8px;height:2px;background:var(--c);border-radius:1px}
+.psec{margin:12px 2px 6px;font-size:12px;color:var(--mut);display:flex;align-items:baseline;gap:6px;flex-wrap:wrap}
+.psec b{color:var(--ink);font-size:12.5px}
+.linkbtn{border:0;background:none;color:var(--accent);font-size:12px;padding:4px 2px;text-decoration:underline}
+.pickhelp{color:var(--mut);font-size:12px;padding:10px 4px 2px;line-height:1.5}
+.pickhelp kbd{font:inherit;font-size:11px;border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;padding:0 4px;background:var(--panel2)}
 </style>
 </head>
 <body>
@@ -240,12 +259,13 @@ td.bad{color:var(--bad);text-align:left;white-space:normal}
   <main>
     <aside class="left">
       <div class="phead">
-        <h2>바꿀 수 있는 형상</h2>
+        <div class="lhead"><h2 id="leftTitle">바꿀 부분 고르기</h2><button class="btn ghost sm" id="repick" style="display:none" title="원본 형상에서 바꿀 부분을 다시 고릅니다">다시 고르기</button></div>
         <p id="leftSub">STEP 파일을 열면 여기에 나타납니다</p>
         <div class="search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.2-3.2"/></svg><input id="q" placeholder="이름, 번호, 값으로 찾기"></div>
         <div class="filters" id="filters"></div>
       </div>
       <div class="scroll" id="list"></div>
+      <div class="applybar pickbar" id="pickbar"><span id="pickMsg"></span><button class="btn sm" id="pickCancel" title="고르기 전의 치수로 돌아갑니다">취소</button><button class="btn sm" id="pickAuto" title="모든 후보를 자동으로 처리합니다 (면이 많으면 오래 걸림)">전부 자동</button><button class="btn sm primary" id="pickMake">치수로 만들기</button></div>
       <div class="applybar" id="applybar"><span id="applyMsg"></span><button class="btn sm" id="revert">되돌리기</button><button class="btn sm primary" id="apply">적용</button></div>
     </aside>
     <section class="view" id="view">
@@ -268,11 +288,11 @@ td.bad{color:var(--bad);text-align:left;white-space:normal}
         <div class="drop" id="drop">
           <svg width="46" height="46" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V4m0 0L8 8m4-4 4 4"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>
           <h1>STEP 파일을 여기에 놓으세요</h1>
-          <p>히스토리가 없는 형상에서 구멍, 필렛, 모따기, 두께를 찾아 바꿀 수 있는 치수로 만듭니다</p>
+          <p>히스토리가 없는 형상에서 구멍, 필렛, 모따기, 평면을 찾고, 고른 것만 바꿀 수 있는 치수로 만듭니다</p>
           <button class="btn primary" id="openBtn2">파일 선택</button>
           <div class="steps">
-            <div class="step"><i>1</i><b>열기</b><span>형상을 분석해 피처를 분리합니다</span></div>
-            <div class="step"><i>2</i><b>확인·수정</b><span>3D에서 위치를 보고 치수를 바꿔 봅니다</span></div>
+            <div class="step"><i>1</i><b>열기·고르기</b><span>후보가 색으로 표시됩니다. 바꿀 부분을 누르세요</span></div>
+            <div class="step"><i>2</i><b>치수 만들기·수정</b><span>고른 것만 계산해 치수로 만들고 값을 바꿔 봅니다</span></div>
             <div class="step"><i>3</i><b>DOE 실행</b><span>조합마다 STEP 파일을 만듭니다</span></div>
           </div>
         </div>
@@ -319,6 +339,7 @@ td.bad{color:var(--bad);text-align:left;white-space:normal}
 const $ = id => document.getElementById(id);
 const CAT = {hole:"구멍", fillet:"필렛", chamfer:"모따기", face:"두께·면", other:"기타"};
 const PNAME = {Diameter:"지름", DistanceX:"X 위치", DistanceY:"Y 위치", Distance:"거리", Radius:"반지름", Size:"크기", Length:"깊이", Depth:"깊이", Angle:"각도", Thickness:"면까지 치수", Offset:"이동량"};
+let mode = "", pick = null, lastCtrl = false;
 let S = null, edits = {}, factors = [], filter = "all", sel = 0, hover = 0, running = false, rows = [], showEdges = true;
 
 const fmt = (v, d = 3) => Number(v).toLocaleString("en-US", {maximumFractionDigits: d});
@@ -441,12 +462,14 @@ function featById(n){ return S.features.find(f => f.n === n); }
 function setHover(n){ if(hover === n) return; hover = n; document.querySelectorAll(".feat").forEach(e => e.classList.toggle("hi", +e.dataset.n === n)); V.redraw(); }
 function setSel(n, scroll){ sel = sel === n ? 0 : n; document.querySelectorAll(".feat").forEach(e => { const on = +e.dataset.n === sel; e.classList.toggle("sel", on); if(on){ e.classList.add("open"); if(scroll) e.scrollIntoView({block: "nearest", behavior: "smooth"}); } }); V.redraw(); }
 function renderFilters(){
-  const counts = {all: S.features.length}; for(const f of S.features) counts[f.category] = (counts[f.category] || 0) + 1;
+  const counts = {}; if(mode === "pick"){ counts.all = pick.groups.length + pick.planes.length; for(const g of pick.groups) counts[g.kind] = (counts[g.kind] || 0) + 1; if(pick.planes.length) counts.face = pick.planes.length; }
+  else { counts.all = S.features.length; for(const f of S.features) counts[f.category] = (counts[f.category] || 0) + 1; }
   $("filters").innerHTML = ["all", "hole", "fillet", "chamfer", "face", "other"].filter(k => counts[k]).map(k =>
     `<button class="fbtn ${filter === k ? "on" : ""}" data-f="${k}" style="--c:var(--${k === "all" ? "faint" : k})">${k === "all" ? "" : "<i></i>"}${k === "all" ? "전체" : CAT[k]} ${counts[k]}</button>`).join("");
   $("filters").querySelectorAll("button").forEach(b => b.onclick = () => { filter = b.dataset.f; renderFilters(); renderList(); });
 }
 function renderList(){
+  if(mode === "pick") return renderPick();
   const q = $("q").value.trim().toLowerCase(), open = new Set([...document.querySelectorAll(".feat.open")].map(e => +e.dataset.n));
   const list = S.features.filter(f => (filter === "all" || f.category === filter) && (!q || (ftitle(f) + " " + fauto(f) + " " + f.label + " " + f.n + " " + f.params.map(p => p.short + " " + p.base).join(" ")).toLowerCase().includes(q)));
   $("list").innerHTML = list.length ? list.map(f => `
@@ -466,7 +489,7 @@ function renderList(){
   $("list").querySelectorAll("input[data-p]").forEach(inp => inp.onkeydown = e => { if(e.key === "Enter") applyEdits(); });
   $("list").querySelectorAll("[data-add]").forEach(b => b.onclick = e => { e.stopPropagation(); toggleFactor(b.dataset.add); });
 }
-function allParams(){ const m = {}; for(const f of S.features) for(const p of f.params) m[p.name] = Object.assign({feature: f}, p); return m; }
+function allParams(){ const m = {}; for(const f of (S && S.features) || []) for(const p of f.params) m[p.name] = Object.assign({feature: f}, p); return m; }
 function showApply(){ const n = Object.keys(edits).length; $("applybar").classList.toggle("show", n > 0); $("applyMsg").textContent = n + "개 치수 변경됨"; }
 async function applyEdits(){
   if(!Object.keys(edits).length) return; busy(true, "형상을 다시 만드는 중");
@@ -491,6 +514,8 @@ function useState(st, keepView){
   hud();
 }
 function loaded(st){
+  if(st.mode === "pick") return enterPick(st);
+  mode = "edit"; pick = null; $("pickbar").classList.remove("show"); $("repick").style.display = "inline-block"; $("leftTitle").textContent = "바꿀 수 있는 치수";
   S = null; edits = {}; factors = []; sel = 0; hover = 0; rows = []; filter = "all";
   useState(st, false); syncEdits();
   const i = S.info, np = S.features.reduce((a, f) => a + f.params.length, 0);
@@ -503,7 +528,7 @@ function loaded(st){
   $("q").value = ""; renderFilters(); renderList(); showApply(); renderFactors(); showResults(false); if(C) renderChat();
 }
 async function openFile(file){
-  if(!file) return; busy(true, "형상을 분석하는 중", file.name + " · 부품이 복잡하면 몇 분 걸릴 수 있습니다"); watchProgress(true);
+  if(!file) return; busy(true, "형상을 읽는 중", file.name); watchProgress(true);
   try{ const buf = await file.arrayBuffer(); loaded(await api("/api/open?name=" + encodeURIComponent(file.name), {method: "POST", body: buf})); }
   catch(e){ toast("열 수 없습니다: " + e.message, 6000); } watchProgress(false); busy(false);
 }
@@ -532,10 +557,11 @@ async function pulse(){
     if(p.rev !== rev && !p.busy && !$("overlay").classList.contains("show")){
       const st = await api("/api/state"); rev = st.rev;
       if(!st.loaded){ if(S) location.reload(); }
-      else if(!S || S.info.folder !== st.info.folder) loaded(st);
+      else if(!S || S.info.folder !== st.info.folder || st.mode !== mode) loaded(st);
+      else if(mode === "pick") enterPick(st);
       else { useState(st, true); syncEdits(); renderList(); showApply(); }
     }
-    if(S){
+    if(S && S.features){
       const key = JSON.stringify(p.aliases);
       if(key !== aliasKey){ aliasKey = key; for(const f of S.features) f.alias = p.aliases[f.n] || ""; renderList(); renderFactors(); }
       if(p.highlight !== shown){ shown = p.highlight; if(shown && featById(shown)){ sel = 0; setSel(shown, true); } else if(!shown && sel) setSel(sel); }
@@ -614,6 +640,89 @@ function sendCpu(body, wait = 150){
 async function loadCpu(){ try{ cpuState = await api("/api/cpu"); renderCpu(); }catch(e){} }
 function cpuPop(on){ $("cpuPop").classList.toggle("show", on); if(on) loadCpu(); }
 
+/* ---------------------------------------------------------------- pick mode: choose what becomes a dimension */
+const KINDC = {hole: "--hole", fillet: "--fillet", chamfer: "--chamfer", face: "--face"};
+function hex2(c){ c = c.replace("#", ""); if(c.length === 3) c = c.split("").map(x => x + x).join(""); return [0, 2, 4].map(i => parseInt(c.substr(i, 2), 16)); }
+function mixHex(a, b, t){ const x = hex2(a), y = hex2(b); return "#" + x.map((v, i) => Math.round(v + (y[i] - v) * t).toString(16).padStart(2, "0")).join(""); }
+function cssv(n){ return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
+function gtitle(g){ const n = g.items.length; return g.kind === "hole" ? `구멍 Ø${fmt(g.size)}` + (n > 1 ? ` × ${n}` : "") : g.kind === "fillet" ? `필렛 R${fmt(g.size)} · 면 ${n}개` : `모따기 ${fmt(g.size)} · 면 ${n}개`; }
+function ititle(it){
+  if(it.kind === "face") return `평면 ${it.side ? it.side.replace("-", "−") + " 방향" : ""} · 면적 ${fmt(it.size, 0)} mm²`;
+  const g = pick.gById[it.group]; return g ? gtitle(g) : KIND[it.kind];
+}
+const KIND = {hole: "구멍", fillet: "필렛", chamfer: "모따기", face: "평면"};
+function enterPick(st){
+  mode = "pick"; if(st.rev !== undefined) rev = st.rev; edits = {}; factors = []; sel = 0; hover = 0; rows = []; filter = "all";
+  S = Object.assign({}, st); delete S.features;
+  pick = {items: st.items, groups: st.groups, byId: {}, gById: {}, chosen: new Set(st.selection || []), planes: [], planesOpen: false, hoverG: null, built: st.built};
+  st.items.forEach((it, k) => { it.n = k + 1; pick.byId[it.id] = it; if(it.kind === "face") pick.planes.push(it); });
+  st.groups.forEach(g => pick.gById[g.id] = g);
+  V.setMesh(st.mesh, pickFeats(), false);
+  $("banner").style.display = "none"; hud();
+  $("empty").style.display = "none"; $("toolbar").style.display = "flex"; $("hint").style.display = "block";
+  $("file").style.display = "flex"; $("fname").textContent = st.info.name;
+  $("chips").innerHTML = `<span class="chip">면 ${st.info.faces}개</span><span class="chip">후보 ${st.items.length}개</span><span class="chip">읽기 ${st.info.scan_seconds}초</span>`;
+  $("leftTitle").textContent = "바꿀 부분 고르기"; $("repick").style.display = "none";
+  $("leftSub").textContent = st.items.length ? "고른 것만 계산해 치수로 만듭니다" : "바꿀 수 있는 후보를 찾지 못했습니다";
+  $("q").value = ""; $("applybar").classList.remove("show"); $("pickbar").classList.add("show"); $("pickCancel").style.display = st.built ? "inline-block" : "none";
+  renderFilters(); renderPick(); renderFactors(); showResults(false); pickInfo();
+}
+function pickFeats(){
+  const base = cssv("--solid");
+  return pick.items.map(it => { const on = pick.chosen.has(it.id), c = cssv(KINDC[it.kind]), hot = pick.hoverG && it.group === pick.hoverG;
+    return {n: it.n, color: on || hot ? c : mixHex(c, base, 0.55), category: (it.kind === "face" && !on) ? "face" : "pick"}; });
+}
+function recolor(){ if(pick && S.mesh) V.setMesh(S.mesh, pickFeats(), true); }
+function toggleItem(id){ if(pick.chosen.has(id)) pick.chosen.delete(id); else pick.chosen.add(id); renderPick(); recolor(); pickInfo(); }
+function toggleGroup(gid){ const g = pick.gById[gid], all = g.items.every(i => pick.chosen.has(i)); for(const i of g.items) all ? pick.chosen.delete(i) : pick.chosen.add(i); renderPick(); recolor(); pickInfo(); }
+function pickInfo(){
+  const n = {hole: 0, fillet: 0, chamfer: 0, face: 0}; for(const id of pick.chosen) n[pick.byId[id].kind]++;
+  const parts = [n.hole && `구멍 ${n.hole}`, n.fillet && `필렛 면 ${n.fillet}`, n.chamfer && `모따기 면 ${n.chamfer}`, n.face && `평면 ${n.face}`].filter(Boolean);
+  $("pickMsg").textContent = parts.length ? "선택: " + parts.join(", ") : "아직 고른 것이 없습니다";
+  $("pickMake").disabled = !parts.length;
+}
+function renderPick(){
+  const q = $("q").value.trim().toLowerCase(), show = k => filter === "all" || filter === k;
+  let h = "";
+  for(const g of pick.groups){
+    if(!show(g.kind) || (q && !gtitle(g).toLowerCase().includes(q))) continue;
+    const n = g.items.filter(i => pick.chosen.has(i)).length;
+    h += `<div class="grp ${n ? "on" : ""}" data-g="${g.id}" style="--c:var(${KINDC[g.kind]})"><span class="cb ${n === g.items.length ? "full" : n ? "part" : ""}"></span>
+      <div><b>${gtitle(g)}</b><small>${n === g.items.length ? "모두 선택" : n ? `${n} / ${g.items.length} 선택` : "누르면 묶음 전체를 고릅니다"}</small></div></div>`;
+  }
+  if(show("face") && pick.planes.length){
+    const ns = pick.planes.filter(i => pick.chosen.has(i.id)).length, list = pick.planes.filter(i => (pick.planesOpen || pick.chosen.has(i.id)) && (!q || ititle(i).toLowerCase().includes(q)));
+    h += `<div class="psec"><b>평면 (두께·높이)</b> ${pick.planes.length}개 중 ${ns}개 선택 · 3D에서 면을 누르세요</div>`;
+    for(const it of list){ const on = pick.chosen.has(it.id);
+      h += `<div class="grp ${on ? "on" : ""}" data-i="${it.id}" style="--c:var(--face)"><span class="cb ${on ? "full" : ""}"></span><div><b>${ititle(it)}</b><small>위치 ${it.at.map(v => fmt(v, 1)).join(", ")}</small></div></div>`; }
+    h += `<button class="linkbtn" id="planesToggle">${pick.planesOpen ? "고른 평면만 보기" : "평면 모두 보기"}</button>`;
+  }
+  h += `<div class="pickhelp">3D에서 면을 누르면 같은 크기의 묶음이 선택됩니다. <kbd>Ctrl</kbd>+클릭은 그 면 하나만 고릅니다. 구멍을 고르면 입구의 모따기·필렛도 함께 만들어집니다.</div>`;
+  $("list").innerHTML = pick.items.length ? h : `<div class="placeholder"><b>후보가 없습니다</b>원통 구멍, 일정한 필렛·모따기, 움직일 수 있는 평면을 찾지 못했습니다</div>`;
+  $("list").querySelectorAll("[data-g]").forEach(el => { el.onclick = () => toggleGroup(el.dataset.g);
+    el.onmouseenter = () => { pick.hoverG = el.dataset.g; recolor(); }; el.onmouseleave = () => { pick.hoverG = null; recolor(); }; });
+  $("list").querySelectorAll("[data-i]").forEach(el => { el.onclick = () => toggleItem(el.dataset.i);
+    el.onmouseenter = () => setHover(pick.byId[el.dataset.i].n); el.onmouseleave = () => setHover(0); });
+  const t = $("planesToggle"); if(t) t.onclick = () => { pick.planesOpen = !pick.planesOpen; renderPick(); };
+}
+function pickHover(n, e){
+  setHover(n); const t = $("tip"), it = n ? pick.items[n - 1] : null;
+  if(it && e){ const r = $("view").getBoundingClientRect(); t.textContent = ititle(it) + (it.group ? " · 클릭: 묶음 전체, Ctrl+클릭: 이 면만" : " · 클릭: 고르기"); t.style.left = (e.clientX - r.left) + "px"; t.style.top = (e.clientY - r.top) + "px"; t.style.display = "block"; }
+  else t.style.display = "none";
+}
+function pickClick(n){ const it = n ? pick.items[n - 1] : null; if(!it) return; if(it.group && !lastCtrl) toggleGroup(it.group); else toggleItem(it.id); }
+async function makeDims(all){
+  if(all && !confirm("모든 후보를 자동으로 처리합니다. 면이 많은 부품은 몇 분 이상 걸릴 수 있습니다. 계속할까요?")) return;
+  busy(true, "치수를 만드는 중", all ? "모든 후보" : $("pickMsg").textContent); watchProgress(true);
+  try{ const st = await post("/api/make", all ? {all: true} : {items: [...pick.chosen]}); loaded(st);
+    if(st.info.auto_added) toast(`구멍 입구의 모따기·필렛 면 ${st.info.auto_added}개를 함께 치수로 만들었습니다`, 5000);
+    else if(st.info.skipped.length) toast("일부는 치수로 만들지 못해 원래 형상에 남겼습니다 (위쪽 표시에 마우스를 올려 보세요)", 5000); }
+  catch(e){ toast("만들 수 없습니다: " + e.message, 6000); }
+  watchProgress(false); busy(false);
+}
+async function repick(){ busy(true, "원본 형상 불러오는 중"); try{ enterPick(await api("/api/pick")); }catch(e){ toast(e.message); } busy(false); }
+async function cancelPick(){ busy(true, "돌아가는 중"); try{ loaded(await api("/api/state")); }catch(e){ toast(e.message); } busy(false); }
+
 /* ---------------------------------------------------------------- DOE */
 function toggleFactor(name){
   if(running) return; const i = factors.findIndex(f => f.name === name);
@@ -635,7 +744,7 @@ function renderFactors(){
       ${f.mode === "range" ? `<div class="grid3"><div class="fld"><small>최소</small><input type="number" step="any" value="${f.min}" data-k="min" data-i="${i}"></div><div class="fld"><small>최대</small><input type="number" step="any" value="${f.max}" data-k="max" data-i="${i}"></div><div class="fld"><small>단계</small><input type="number" min="2" max="50" value="${f.steps}" data-k="steps" data-i="${i}"></div></div>`
         : `<div class="fld"><small>값 (쉼표로 구분)</small><input value="${f.list}" data-k="list" data-i="${i}"></div>`}
       <div class="vals" data-vals="${i}">${vs.map(v => `<span class="${Math.abs(v - p.base) < 1e-9 ? "base" : ""}">${fmt(v)}</span>`).join("")}</div></div>`; }).join("")
-    : `<div class="placeholder"><b>아직 변수가 없습니다</b>${S ? "왼쪽 목록에서 치수 옆의 <b style=\"display:inline\">+</b> 를 눌러 추가하세요" : "먼저 STEP 파일을 여세요"}</div>`;
+    : `<div class="placeholder"><b>아직 변수가 없습니다</b>${mode === "pick" ? "왼쪽에서 바꿀 부분을 고르고 <b style=\"display:inline\">치수로 만들기</b>를 누르세요" : S ? "왼쪽 목록에서 치수 옆의 <b style=\"display:inline\">+</b> 를 눌러 추가하세요" : "먼저 STEP 파일을 여세요"}</div>`;
   $("factors").querySelectorAll("[data-rm]").forEach(b => b.onclick = () => toggleFactor(factors[+b.dataset.rm].name));
   $("factors").querySelectorAll("[data-mode]").forEach(b => b.onclick = () => { factors[+b.dataset.i].mode = b.dataset.mode; renderFactors(); });
   $("factors").querySelectorAll("input[data-k]").forEach(inp => inp.oninput = () => { const f = factors[+inp.dataset.i]; f[inp.dataset.k] = inp.dataset.k === "list" ? inp.value : parseFloat(inp.value);
@@ -679,6 +788,8 @@ async function runDoe(){
 $("runBtn").onclick = runDoe;
 $("backBtn").onclick = async () => { showResults(false); $("doeSub").textContent = "바꿀 치수와 값의 범위를 정하면 모든 조합을 만듭니다"; renderFactors(); await revertEdits(); };
 $("apply").onclick = applyEdits; $("revert").onclick = revertEdits;
+$("pickMake").onclick = () => makeDims(false); $("pickAuto").onclick = () => makeDims(true); $("repick").onclick = repick; $("pickCancel").onclick = cancelPick;
+window.addEventListener("pointerdown", e => { lastCtrl = e.ctrlKey || e.metaKey; }, true);
 $("cpuBtn").onclick = e => { e.stopPropagation(); cpuPop(!$("cpuPop").classList.contains("show")); };
 $("ovCpu").onclick = e => { e.stopPropagation(); cpuPop(true); };
 $("cpuClose").onclick = () => cpuPop(false);
@@ -706,8 +817,8 @@ window.addEventListener("dragover", e => { e.preventDefault(); $("drop").classLi
 window.addEventListener("dragleave", () => $("drop").classList.remove("over"));
 window.addEventListener("drop", e => { e.preventDefault(); $("drop").classList.remove("over"); if(e.dataTransfer.files.length) openFile(e.dataTransfer.files[0]); });
 if(V.ok){
-  V.onHover = (n, e) => { setHover(n); const t = $("tip"); if(n && e && S){ const f = featById(n); if(f){ const r = $("view").getBoundingClientRect(); t.textContent = f.n + ". " + ftitle(f); t.style.left = (e.clientX - r.left) + "px"; t.style.top = (e.clientY - r.top) + "px"; t.style.display = "block"; return; } } t.style.display = "none"; };
-  V.onClick = n => { if(n) { if(sel !== n){ sel = 0; setSel(n, true); } } else if(sel){ setSel(sel); } };
+  V.onHover = (n, e) => { if(mode === "pick") return pickHover(n, e); setHover(n); const t = $("tip"); if(n && e && S){ const f = featById(n); if(f){ const r = $("view").getBoundingClientRect(); t.textContent = f.n + ". " + ftitle(f); t.style.left = (e.clientX - r.left) + "px"; t.style.top = (e.clientY - r.top) + "px"; t.style.display = "block"; return; } } t.style.display = "none"; };
+  V.onClick = n => { if(mode === "pick") return pickClick(n); if(n) { if(sel !== n){ sel = 0; setSel(n, true); } } else if(sel){ setSel(sel); } };
 } else { $("banner").style.display = "block"; $("banner").textContent = "이 브라우저는 3D 표시(WebGL2)를 지원하지 않습니다"; }
 async function waitAnalysis(){
   busy(true, "형상을 분석하는 중", ""); watchProgress(true);
@@ -716,6 +827,10 @@ async function waitAnalysis(){
   try{ const st = await api("/api/state"); if(st.loaded) loaded(st); }catch(e){ toast(e.message); }
 }
 api("/api/state").then(async st => { if(!st.loaded){ if(st.analysing) waitAnalysis(); return; } loaded(st);
+  if(mode === "pick"){
+    if(location.hash === "#pickdemo"){ const g = pick.groups.find(x => x.kind === "fillet") || pick.groups[0]; if(g) toggleGroup(g.id); const h = pick.groups.find(x => x.kind === "hole"); if(h) toggleGroup(h.id); const f = pick.planes.find(x => x.side === "+Z") || pick.planes[0]; if(f) toggleItem(f.id); pick.hoverG = g ? g.id : null; recolor(); }
+    return;
+  }
   if(location.hash === "#selftest"){          // drives the page once without a mouse (used by the automated screenshot)
     const P = allParams(), pick = k => Object.keys(P).find(n => P[n].short.startsWith(k));
     for(const n of [pick("Radius"), pick("Diameter")]) if(n) toggleFactor(n);

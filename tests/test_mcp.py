@@ -88,6 +88,17 @@ report("no part yet -> told to open one", bad and "open_part" in text)
 text, bad = tool("open_part", path=os.path.join(tmp, "missing.stp"))
 report("missing file reported", bad and "not found" in text)
 text, bad = tool("open_part", path=step)
+report("open_part lists the candidates, builds nothing", not bad and "hole D8, 2 holes" in text and "fillet R3, 4 faces" in text
+       and "Movable flat faces (6" in text and "make_dimensions" in text and st.doc is None, text.splitlines()[0])
+text2, bad2 = tool("set_values", values={"x": 1})
+report("no dimensions yet -> told to make them", bad2 and "make_dimensions" in text2)
+report("unknown group refused", tool("make_dimensions", groups=["g99"])[1] and tool("make_dimensions")[1])
+gid = next(g["id"] for g in st.cands["groups"] if g["kind"] == "fillet")
+text, bad = tool("make_dimensions", groups=[gid])
+report("make_dimensions: only the chosen group", not bad and "Fillet_R3_x4.Radius = 3 mm" in text and "Hole_D8" not in text
+       and "Features: 1" in text, text.splitlines()[0])
+report("candidates on request show what was made", "[dimension made for 4]" in tool("get_part", candidates=True)[0])
+text, bad = tool("make_dimensions", everything=True)
 report("open_part describes the part", not bad and "identical to the file: yes" in text and "Hole_D8_x2.Diameter1 = 8 mm" in text
        and "Fillet_R3_x4.Radius = 3 mm" in text and "Features: 8" in text and "nothing, all parameters" in text, text.splitlines()[0])
 text, bad = tool("get_part", category="fillet", density_g_cm3=2.7)
@@ -173,7 +184,7 @@ text, bad = tool("export_step", file_name="..\\..\\out side")
 out = os.path.join(st.dir, "out_side.step")
 report("export_step stays in the work folder", not bad and os.path.isfile(out) and out in text and "Diameter1 = 9" in text
        and abs(Part.read(out).Volume - (v0 - 2 * 3.141592653589793 * (4.5 ** 2 - 16) * 10)) < 0.05)
-report("unknown argument explained", tool("get_part", colour="red") == ("get_part has no argument colour. Arguments: category, feature, density_g_cm3", True))
+report("unknown argument explained", tool("get_part", colour="red") == ("get_part has no argument colour. Arguments: category, feature, density_g_cm3, candidates", True))
 
 # ------------------------------------------------------------ stdio relay (mcp_server.py)
 msgs = [{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18"}},

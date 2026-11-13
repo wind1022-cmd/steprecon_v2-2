@@ -14,7 +14,9 @@ thickness), and builds variants of the part for a design of experiments (DOE). T
 STEP Studio window; everything you change appears there.
 
 How to work:
-- Start with get_part (or open_part with a file path) and use the exact parameter names it lists.
+- Start with get_part (or open_part with a file path). A freshly opened part has no dimensions yet, only
+candidates: call make_dimensions with the groups / items the user wants to vary (only those are computed, so pick
+what is needed rather than everything). Then use the exact parameter names get_part lists.
 - set_values rebuilds and checks the solid; a value that cannot be built is refused and nothing changes. \
 find_limits tells how far a parameter can go.
 - For a DOE: propose factors and ranges, call plan_doe, show the plan to the user, and call run_doe only after \

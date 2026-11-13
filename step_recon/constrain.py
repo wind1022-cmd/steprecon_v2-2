@@ -185,8 +185,18 @@ def constrain_sketch(sk):
 
 
 def constrain_document(doc):
-    """Constrain every sketch of the document. Returns a summary for reports."""
-    per = [constrain_sketch(o) for o in doc.Objects if o.TypeId == "Sketcher::SketchObject"]
+    """Constrain every sketch of the document. Returns a summary for reports.
+    Left out: the outline sketch of a movable face's pocket (machined.add_face_moves) - it follows the face's one
+    number, its own dimensions are never varied, and a land with hundreds of edges would take minutes."""
+    helpers = set()
+    pockets = {o.SR_Pair for o in doc.Objects if hasattr(o, "SR_Pair")}
+    for o in doc.Objects:
+        if o.Name in pockets:
+            prof = getattr(o, "Profile", None)
+            prof = prof[0] if isinstance(prof, (tuple, list)) and prof else prof
+            if prof is not None and prof.TypeId == "Sketcher::SketchObject":
+                helpers.add(prof.Name)
+    per = [constrain_sketch(o) for o in doc.Objects if o.TypeId == "Sketcher::SketchObject" and o.Name not in helpers]
     return {"sketches": len(per), "fully_constrained": sum(1 for p in per if p["dof_after"] == 0),
             "geometric": sum(p["geometric"] for p in per), "dimensions": sum(p["dimensions"] for p in per),
             "restored": [p["sketch"] for p in per if "restored" in p], "detail": per}

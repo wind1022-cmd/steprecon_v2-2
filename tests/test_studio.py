@@ -62,6 +62,14 @@ report("nothing loaded at start", call("/api/state")[1] == {"loaded": False, "re
 
 with open(step, "rb") as f:
     code, s = call("/api/open?name=plate.stp", f.read())
+pk = s
+kinds = sorted({it["kind"] for it in pk.get("items", [])})
+report("upload -> the part and its candidates, nothing built", code == 200 and pk["mode"] == "pick" and not pk["built"]
+       and kinds == ["face", "fillet", "hole"] and len(pk["mesh"]["feature"]) == len(pk["mesh"]["positions"]) // 3, str(kinds))
+report("no dimensions before making them", post("/api/set", {"values": {}})[0] == 500)
+report("nothing picked is refused", post("/api/make", {"items": []})[0] == 400)
+code, s = post("/api/make", {"all": True})
+
 feats = s.get("features", [])
 cats = sorted(f["category"] for f in feats)
 report("upload -> features", code == 200 and s["loaded"] and s["info"]["identical"] and cats == ["face"] * 6 + ["fillet", "hole"], str(cats))

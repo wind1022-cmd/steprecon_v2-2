@@ -113,6 +113,10 @@ class Studio:
         self.rows = []
         self.worker = Worker()
         self.progress = {"active": False}     # how far the running analysis is (open)
+        self.ref = None         # the part as read
+        self.cands = None       # what could become a dimension (machined.scan)
+        self.selection = []     # candidate ids the features were made from
+        self.auto = False       # made with "everything" instead of a selection
         self.rev = 0            # grows whenever the solid on screen is out of date
         self.quiet = False      # no rev change while variants are being built
         self.notes = []         # what the assistant did, for the page
@@ -179,7 +183,7 @@ class Studio:
 
     # ------------------------------------------------------------ model
     def open(self, path, name=None):
-        """Read a STEP/IGES file and turn it into blank + features."""
+        """Read a STEP/IGES file and find what could become a dimension (fast; nothing is built yet: make())."""
         self.progress = {"active": True, "pct": 0.0, "text": "준비 중", "started": time.time(),
                          "name": name or os.path.basename(path)}
         try:
@@ -196,8 +200,51 @@ class Studio:
         os.makedirs(self.dir, exist_ok=True)
         self._step(1, "STEP 파일 읽는 중")
         ref = analyze.load_shape(path)
-        self._step(5, f"형상 읽음: 면 {len(ref.Faces)}개")
-        sess, report = machined.build(ref, lambda f, stage, info: self._step(5 + 80 * f, machined.describe(stage, info)))
+        self._step(40, f"형상 읽음: 면 {len(ref.Faces)}개 · 바꿀 수 있는 후보 찾는 중")
+        self.ref, self.base, self.ref_volume = ref, base, ref.Volume
+        self.cands = machined.scan(ref)
+        self.selection, self.auto = [], False
+        self.info = {"name": name, "base": base, "folder": self.dir, "faces": len(ref.Faces),
+                     "scan_seconds": round(time.time() - t0, 1), "built": False}
+        self._step(90, "3D 화면 데이터 만드는 중")
+        self.aliases, self.highlight, self.plan = {}, 0, None
+        self.bump()
+        return self.state(mesh=True)
+
+    def make(self, items=(), everything=False):
+        """Turn the picked candidates (ids from pick_state) - or everything - into features with dimensions.
+        Only those are computed; the rest of the part stays as it is in the file."""
+        if self.ref is None:
+            raise ValueError("no part is open")
+        items = list(dict.fromkeys(items or []))
+        known = {it["id"] for it in self.cands["items"]}
+        unknown = [i for i in items if i not in known]
+        if unknown:
+            raise ValueError("unknown candidate: " + ", ".join(map(str, unknown[:5])))
+        if not everything and not items:
+            raise ValueError("nothing picked")
+        self.progress = {"active": True, "pct": 0.0, "text": "준비 중", "started": time.time(),
+                         "name": self.info["name"]}
+        try:
+            return self._make(items, everything)
+        finally:
+            self.progress = {"active": False}
+
+    def _make(self, items, everything):
+        t0 = time.time()
+        ref, base, name = self.ref, self.base, self.info["name"]
+        self._drop_doc()
+        cb = lambda f, stage, info: self._step(2 + 83 * f, machined.describe(stage, info))   # noqa: E731
+        if everything:
+            sess, report = machined.build(ref, cb)
+        else:
+            by = {it["id"]: it for it in self.cands["items"]}
+            pick = [by[i] for i in items]
+            sess, report = machined.build_selected(
+                ref, [it["key"] for it in pick if it["kind"] == "hole"],
+                [it["faces"][0] for it in pick if it["kind"] in ("fillet", "chamfer")],
+                [it["faces"][0] for it in pick if it["kind"] == "face"], cb)
+        self.selection, self.auto = ([] if everything else items), everything
         fcstd = os.path.join(self.dir, base + ".FCStd")
         self._step(86, "모델 저장 중 (스케치에 치수 넣는 중)")
         saved = sess.save(fcstd)
@@ -213,12 +260,35 @@ class Studio:
                      "faces": len(ref.Faces), "skipped": report.get("skipped", []),
                      "counts": {"holes": report["holes_made"], "fillets": report["fillets_made"],
                                 "chamfers": report["chamfers_made"], "faces": report.get("faces_made", 0)},
-                     "sketches": saved.get("sketches", {})}
+                     "sketches": saved.get("sketches", {}), "built": True, "auto": everything,
+                     "auto_added": len(report.get("auto_added", []))}
         self.bump()
         self._step(97, "3D 화면 데이터 만드는 중")
         return self.state(mesh=True)
 
+    def _drop_doc(self):
+        """Forget the features (the part as read and its candidates stay)."""
+        if self.doc is not None:
+            try:
+                App.closeDocument(self.doc.Name)
+            except Exception:
+                pass
+        self.doc, self.run_dir, self.rows = None, None, []
+
+    def pick_state(self, mesh=False):
+        """The part as read with its candidates: what the user picks from."""
+        if self.ref is None:
+            raise ValueError("no part is open")
+        out = {"loaded": True, "mode": "pick", "rev": getattr(self, "rev", 0), "built": self.doc is not None,
+               "info": self.info, "items": [{k: v for k, v in it.items() if k != "key"} for it in self.cands["items"]],
+               "groups": self.cands["groups"], "selection": self.selection, "measure": self._measure(self.ref),
+               "reference_volume": round(self.ref_volume, 4)}
+        if mesh:
+            out["mesh"] = self.mesh(self.ref, self.cands["owner"])
+        return out
+
     def close(self):
+        self.ref, self.cands, self.selection, self.auto = None, None, [], False
         if self.doc is not None:
             try:
                 App.closeDocument(self.doc.Name)
@@ -269,12 +339,14 @@ class Studio:
                     owner[i] = number[o.Name]
         return owner
 
-    def mesh(self):
-        """Triangles (with a feature number per vertex) and edge lines of the current solid."""
-        shape = P.result_shape(self.doc)
+    def mesh(self, shape=None, owner=None):
+        """Triangles (with a feature number per vertex - a candidate number for `shape` with `owner`) and edge
+        lines of the current solid."""
+        if shape is None:
+            shape = P.result_shape(self.doc)
+            owner = self._face_owner(shape)
         bb = shape.BoundBox
         defl = max(bb.DiagonalLength * 0.0015, 1e-3)
-        owner = self._face_owner(shape)
         pos, nor, fid, idx = [], [], [], []
         for fi, face in enumerate(shape.Faces):
             try:
@@ -309,6 +381,8 @@ class Studio:
                 "bbox": [bb.XMin, bb.YMin, bb.ZMin, bb.XMax, bb.YMax, bb.ZMax]}
 
     def state(self, mesh=False):
+        if self.doc is None and self.ref is not None:
+            return self.pick_state(mesh)
         if self.doc is None:
             return {"loaded": False, "rev": self.rev}
         current = {p["name"]: p["value"] for p in P.collect(self.doc)}
@@ -340,7 +414,7 @@ class Studio:
                                       "value": round(current.get(p["name"], p["value"]), 6),
                                       "unit": "deg" if p["kind"] == "angle" else "mm"} for p in f["params"]]})
         shape = P.result_shape(self.doc)
-        out = {"loaded": True, "rev": self.rev, "info": self.info, "features": feats, "problems": P.problems(self.doc),
+        out = {"loaded": True, "rev": self.rev, "mode": "edit", "selection": self.selection, "auto": self.auto, "info": self.info, "features": feats, "problems": P.problems(self.doc),
                "measure": self._measure(shape) if shape is not None else None,
                "reference_volume": round(self.ref_volume, 4)}
         if mesh:
@@ -360,7 +434,8 @@ class Studio:
     def set_values(self, values, from_base=True):
         """Apply parameter values (others go back to the part's own values) and rebuild."""
         if self.doc is None:
-            raise ValueError("no part is open")
+            raise ValueError("no part is open" if self.ref is None else
+                             "no dimensions yet: pick what to change and make them first")
         unknown = [k for k in values if k not in self.base_values]
         if unknown:
             raise ValueError("unknown parameter: " + ", ".join(unknown))
@@ -473,6 +548,8 @@ def make_handler(studio):
                     return self._send(200, studio.progress_public())
                 if url.path == "/api/cpu":
                     return self._send(200, cpu.state())
+                if url.path == "/api/pick":
+                    return self._send(200, W(studio.pick_state, mesh=True))
                 if url.path == "/api/state":
                     if studio.progress.get("active"):       # do not wait minutes for the analysis to end
                         return self._send(200, {"loaded": False, "analysing": True, "rev": getattr(studio, "rev", 0)})
@@ -551,6 +628,12 @@ def make_handler(studio):
                         return self._send(400, {"error": "cores must be a number"})
                     low = None if b.get("low") is None else bool(b["low"])
                     return self._send(200, studio.set_cpu(cores, low))
+                if url.path == "/api/make":
+                    b = self._json()
+                    try:
+                        return self._send(200, W(studio.make, b.get("items") or [], bool(b.get("all"))))
+                    except ValueError as e:
+                        return self._send(400, {"error": str(e)})
                 if url.path == "/api/set":
                     body = self._json()
                     bad = W(studio.set_values, body.get("values", {}))

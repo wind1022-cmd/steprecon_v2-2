@@ -101,9 +101,12 @@ def main():
         def open_at_start():
             try:
                 s = st.worker.call(st.open, path)
-                c = s["info"]["counts"]
-                print(f"opened       {c['holes']} holes, {c['fillets']} filleted and {c['chamfers']} chamfered edges; "
-                      f"identical={s['info']['identical']}, {s['info']['seconds']} s")
+                n = {}
+                for it in s.get("items", []):
+                    n[it["kind"]] = n.get(it["kind"], 0) + 1
+                print(f"opened       candidates: {n.get('hole', 0)} holes, {n.get('fillet', 0)} fillet and "
+                      f"{n.get('chamfer', 0)} chamfer faces, {n.get('face', 0)} movable flat faces "
+                      f"({s['info']['scan_seconds']} s) - pick in the window what becomes a dimension")
             except Exception as e:
                 print(f"opened       could not open {a.file}: {type(e).__name__}: {e}")
 

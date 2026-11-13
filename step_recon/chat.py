@@ -95,8 +95,11 @@ class Chat:
     # ------------------------------------------------------------ one turn of the conversation
     def _context(self, selected):
         st = self.studio
-        if st.doc is None:
+        if st.ref is None and st.doc is None:
             return "[No part is open.]"
+        if st.doc is None:
+            return (f"[Part {st.info['name']} is open; no dimensions made yet ({len(st.cands['items'])} candidates). "
+                    "The user can pick in the window, or you call make_dimensions.]")
         line = f"[Part {st.info['name']} is open, {len(st.features)} features."
         f = next((f for f in st.features if f["n"] == selected), None)
         if f is not None:

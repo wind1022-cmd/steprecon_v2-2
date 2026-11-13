@@ -71,6 +71,13 @@ def _hole_key(h):
             round(h["foot"].y, 3), round(h["foot"].z, 3), round(h["radius"], 4), round(h["t0"], 3), round(h["t1"], 3))
 
 
+def _line_key(h):
+    """Identity of a hole that also survives taking its rim chamfer off (which changes its length): axis line and
+    radius only."""
+    return (round(h["axis"].x, 4), round(h["axis"].y, 4), round(h["axis"].z, 4), round(h["foot"].x, 3),
+            round(h["foot"].y, 3), round(h["foot"].z, 3), round(h["radius"], 4))
+
+
 def _plug(h):
     start = h["foot"] + h["axis"] * h["t0"]
     return Part.makeCylinder(h["radius"], h["t1"] - h["t0"], start, h["axis"])
@@ -223,10 +230,13 @@ def describe(stage, info, korean=True):
 
 
 # ------------------------------------------------------------------ building
-def _cut_holes(sess, target, report, exclude):
-    """Fill the holes of `target`, use that as blank and cut them again. Returns the set of holes that failed."""
+def _cut_holes(sess, target, report, exclude, only=None):
+    """Fill the holes of `target`, use that as blank and cut them again. Returns the set of holes that failed.
+    only: line keys (_line_key) of the holes to treat; the others stay in the blank. None = all."""
     holes = []
     for h in find_holes(target):
+        if only is not None and _line_key(h) not in only:
+            continue
         key = _hole_key(h)
         if key in exclude:
             continue
@@ -433,7 +443,11 @@ def _surroundings(shape, nb, i, n):
     return ("land", reach) if land else (None, 0.0)
 
 
-def add_face_moves(sess, report, limit=12):
+def _pt(v):
+    return f"({v.x:.4g}, {v.y:.4g}, {v.z:.4g})"
+
+
+def add_face_moves(sess, report, limit=12, only=None):
     """Make the position of flat faces a parameter (plate thickness, boss height, height of a machined land ...).
 
     Each movable face gets one feature for moving out and one for moving in, both switched off until its parameter
@@ -444,7 +458,8 @@ def add_face_moves(sess, report, limit=12):
            past the face by the width of those neighbours, so that milling the land lower also takes their upper
            part away instead of leaving a rim.
     Every pair is tried out and in when created and dropped if the volume does not change as expected.
-    The largest `limit` faces are offered."""
+    The largest `limit` faces are offered, or exactly the faces in `only` (faces of the reference, found again in
+    the rebuilt part by position); a face of `only` that cannot be made movable is reported in report["skipped"]."""
     body = sess.body
     anchor = body.Tip
     if anchor is None:
@@ -460,20 +475,35 @@ def add_face_moves(sess, report, limit=12):
     plain = [o for o in body.Group if o.isDerivedFrom("PartDesign::Feature")
              and o.TypeId not in ("PartDesign::Fillet", "PartDesign::Chamfer")]
     real = {plane_key(f) for f in plain[-1].Shape.Faces if type(f.Surface).__name__ == "Plane"} if plain else None
+    pool = range(len(shape.Faces))
+    if only is not None:
+        pool = []
+        for g in only:
+            hit = next((i for i, f in enumerate(shape.Faces) if type(f.Surface).__name__ == "Plane"
+                        and abs(f.Area - g.Area) <= 1e-5 * max(g.Area, 1.0)
+                        and f.CenterOfMass.distanceToPoint(g.CenterOfMass) < 1e-4), None)
+            if hit is None:
+                report["skipped"].append(f"flat face at {_pt(g.CenterOfMass)}: not found in the rebuilt part")
+            else:
+                pool.append(hit)
     cands = []
-    for i, f in enumerate(shape.Faces):
+    for i in pool:
+        f = shape.Faces[i]
         if type(f.Surface).__name__ != "Plane" or not nb[i]:
             continue
-        if real is not None and plane_key(f) not in real:
+        if only is None and real is not None and plane_key(f) not in real:
             continue
         u0, u1, v0, v1 = f.ParameterRange
         n = f.normalAt((u0 + u1) / 2, (v0 + v1) / 2)
         kind, reach = _surroundings(shape, nb, i, n)
         if kind:
             cands.append((f.Area, i, n, kind, reach))
+        elif only is not None:
+            report["skipped"].append(f"flat face at {_pt(f.CenterOfMass)}: cannot be moved (a curved face rises "
+                                     "above its edge)")
     cands.sort(key=lambda c: -c[0])
     made = 0
-    chosen = cands[:limit]
+    chosen = cands[:limit] if only is None else cands
     for ci, (area, i, n, kind, reach) in enumerate(chosen):
         _tell("faces", ci / len(chosen), i=ci + 1, n=len(chosen))
         name = f"Face{i + 1}"
@@ -532,6 +562,9 @@ def add_face_moves(sess, report, limit=12):
         except Exception:
             good = False
         if not good:
+            if only is not None:
+                report["skipped"].append(f"flat face at {_pt(face.CenterOfMass)}: moving it does not give a clean "
+                                         "result")
             for nm in reversed(made_objs):
                 try:
                     sess.doc.removeObject(nm)
@@ -552,7 +585,7 @@ def add_face_moves(sess, report, limit=12):
     report["features"] += made
 
 
-def _attempt(ref, blend_faces, exclude_holes):
+def _attempt(ref, blend_faces, exclude_holes, only_holes=None):
     """One build: take `blend_faces` off, holes out, everything back on. Returns (session, report, identical)."""
     report = {"holes_made": 0, "fillets_made": 0, "chamfers_made": 0, "faces_made": 0, "features": 0, "skipped": [],
               "_refused": set()}
@@ -563,10 +596,10 @@ def _attempt(ref, blend_faces, exclude_holes):
         if target is None:
             return None, report, False
     sess = fc_tools.Session(ref)
-    failed = _cut_holes(sess, target, report, exclude_holes)
+    failed = _cut_holes(sess, target, report, exclude_holes, only_holes)
     if failed:
         App.closeDocument(sess.doc.Name)
-        return _attempt(ref, blend_faces, exclude_holes | failed)
+        return _attempt(ref, blend_faces, exclude_holes | failed, only_holes)
     if blend_faces:
         _dress(sess, report)
     c = sess.compare()
@@ -586,10 +619,13 @@ def build(ref, progress=None):
         _progress, _try = None, {}
 
 
-def _build(ref):
+def _build(ref, blends=None, only_holes=None, plane_faces=None):
+    """blends: {group: face ids} to treat (None: find all); only_holes: line keys (None: all);
+    plane_faces: ref face indices to make movable (None: pick the largest automatically)."""
     global _span, _try
-    _tell("blends", 0.0)
-    blends = find_blends(ref)
+    if blends is None:
+        _tell("blends", 0.0)
+        blends = find_blends(ref)
     everything = sorted(i for ids in blends.values() for i in ids)
     plans = [everything] if everything else []
     if len(blends) > 1:
@@ -599,7 +635,7 @@ def _build(ref):
     for k, faces in enumerate(plans):
         _span = (0.05 + 0.75 * k / len(plans), 0.05 + 0.75 * (k + 1) / len(plans))
         _try = {"attempt": k + 1, "attempts": len(plans)}
-        sess, report, same = _attempt(ref, faces, set())
+        sess, report, same = _attempt(ref, faces, set(), only_holes)
         if sess is None:
             continue
         if same and faces == everything:
@@ -612,7 +648,7 @@ def _build(ref):
         for faces in ([sorted(i for g in good_groups for i in g)] if len(good_groups) > 1 else []) \
                 + [max(good_groups, key=len)]:
             _span, _try = (_last, _last + (0.8 - _last) / 2), {}
-            sess, report, same = _attempt(ref, faces, set())
+            sess, report, same = _attempt(ref, faces, set(), only_holes)
             if sess is not None and same:
                 best = (sess, report)
                 break
@@ -620,12 +656,15 @@ def _build(ref):
                 App.closeDocument(sess.doc.Name)
     if best is None:                        # holes only: identical by construction
         _span, _try = (_last, 0.8), {}
-        sess, report, _ = _attempt(ref, [], set())
+        sess, report, _ = _attempt(ref, [], set(), only_holes)
         best = (sess, report)
     sess, report = best
     _span, _try = (0.8, 1.0), {}
     try:
-        add_face_moves(sess, report)
+        if plane_faces is None:
+            add_face_moves(sess, report)
+        elif plane_faces:
+            add_face_moves(sess, report, only=[ref.Faces[i] for i in plane_faces])
     except Exception as e:      # an extra: the part itself is complete without it
         report["skipped"].append(f"movable faces: {type(e).__name__}: {e}")
     for key in sorted(report.pop("_excluded_holes", set())):
@@ -638,3 +677,114 @@ def _build(ref):
     elif refused:
         report["skipped"].append("some fillets/chamfers left in the blank: " + ", ".join(sorted(refused)))
     return sess, report
+
+
+# ------------------------------------------------------------------ pick what to treat
+def _chamfer_size(shape, i, nb):
+    """Leg length of an equal-leg chamfer face: its width over 2 sin(angle to the neighbours along its long edges)."""
+    f = shape.Faces[i]
+    long_edges = sorted(f.Edges, key=lambda e: -e.Length)[:2]
+    angles = []
+    for e, j in nb[i]:
+        if any(e.isSame(x) for x in long_edges):
+            p = _edge_mid(e)
+            n1, n2 = _normal_at(f, p), _normal_at(shape.Faces[j], p)
+            if n1 is not None and n2 is not None:
+                angles.append(n1.getAngle(n2))
+    a = sum(angles) / len(angles) if angles else math.pi / 4
+    width = f.Area / max(1e-12, sum(e.Length for e in long_edges) / max(1, len(long_edges)))
+    return width / (2 * math.sin(a)) if math.sin(a) > 1e-6 else width
+
+
+def _side(n):
+    k = max(range(3), key=lambda i: abs(n[i]))
+    return (("+" if n[k] > 0 else "-") + "XYZ"[k]) if abs(n[k]) > 0.999 else ""
+
+
+def scan(ref):
+    """What could become a parameter, without building anything (well under a second for most parts).
+
+    items : one per hole, per fillet / chamfer face and per movable flat face
+            {"id", "kind": hole|fillet|chamfer|face, "faces": [ref face indices], "size", "group", ...}
+            holes also carry "key" (for build_selected), "depth", "at"; faces "side", "area", "at".
+    groups: same kind and size together {"id", "kind", "size", "items": [ids]}; flat faces are not grouped.
+    owner : ref face index -> item number (1-based position in items), 0 = not a candidate."""
+    nb = _neighbours(ref)
+    items, groups = [], {}
+
+    def add(item, gkey=None):
+        items.append(item)
+        if gkey is not None:
+            g = groups.setdefault(gkey, {"id": "g%d" % (len(groups) + 1), "kind": item["kind"], "size": item["size"],
+                                         "items": []})
+            g["items"].append(item["id"])
+            item["group"] = g["id"]
+
+    for n, h in enumerate(find_holes(ref), 1):
+        d = round(2 * h["radius"], 4)
+        at = h["foot"] + h["axis"] * h["t1"]
+        add({"id": f"h{n}", "kind": "hole", "faces": list(h["faces"]), "size": d, "key": _line_key(h),
+             "depth": round(h["t1"] - h["t0"], 4), "at": [round(at.x, 3), round(at.y, 3), round(at.z, 3)]},
+            ("hole", d))
+    blend_faces = set()
+    for key, ids in sorted(find_blends(ref).items(), key=lambda kv: str(kv[0])):
+        for i in ids:
+            blend_faces.add(i)
+            if key[0] == "fillet":
+                size = round(key[1], 4)
+            else:
+                size = round(_chamfer_size(ref, i, nb), 3)
+            add({"id": f"b{i}", "kind": key[0], "faces": [i], "size": size}, (key[0], size))
+    for i, f in enumerate(ref.Faces):
+        if i in blend_faces or type(f.Surface).__name__ != "Plane" or not nb[i]:
+            continue
+        u0, u1, v0, v1 = f.ParameterRange
+        n = f.normalAt((u0 + u1) / 2, (v0 + v1) / 2)
+        try:
+            kind, _ = _surroundings(ref, nb, i, n)
+        except Exception:
+            kind = None
+        if kind:
+            c = f.CenterOfMass
+            add({"id": f"p{i}", "kind": "face", "faces": [i], "size": round(f.Area, 3), "side": _side(n),
+                 "surround": kind, "at": [round(c.x, 3), round(c.y, 3), round(c.z, 3)]})
+    owner = [0] * len(ref.Faces)
+    for k, it in enumerate(items, 1):
+        for i in it["faces"]:
+            owner[i] = k
+    order = {"hole": 0, "fillet": 1, "chamfer": 2}
+    gl = sorted(groups.values(), key=lambda g: (order[g["kind"]], -g["size"] if g["kind"] == "hole" else g["size"]))
+    return {"items": items, "groups": gl, "owner": owner}
+
+
+def build_selected(ref, holes=(), blend_faces=(), planes=(), progress=None):
+    """Like build(), but only for what was picked - the rest stays in the blank, untouched, and costs nothing.
+
+    holes: line keys of holes (scan() items' "key"); blend_faces: ref face indices of fillets / chamfers;
+    planes: ref face indices of flat faces to make movable. Fillet / chamfer faces on the rim of a picked hole are
+    taken along (otherwise the rim would keep its old size when the diameter changes): report["auto_added"]."""
+    global _progress, _span, _last, _try
+    _progress, _span, _last, _try = progress, (0.0, 0.05), 0.0, {}
+    try:
+        _tell("blends", 0.0)
+        found = find_blends(ref)
+        chosen = set(blend_faces)
+        added = []
+        holes = {tuple(k) for k in holes}
+        if holes:
+            nb = _neighbours(ref)
+            known = {i for ids in found.values() for i in ids}
+            for h in find_holes(ref):
+                if _line_key(h) in holes:
+                    for fi in h["faces"]:
+                        for _, j in nb[fi]:
+                            if j in known and j not in chosen:
+                                chosen.add(j)
+                                added.append(j)
+        blends = {k: sorted(i for i in ids if i in chosen) for k, ids in found.items()}
+        blends = {k: v for k, v in blends.items() if v}
+        sess, report = _build(ref, blends, holes, sorted(set(planes)))
+        report["auto_added"] = sorted(added)
+        return sess, report
+    finally:
+        _progress, _try = None, {}

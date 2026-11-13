@@ -30,11 +30,22 @@ def _num(schema_desc):
 
 TOOLS = [
     {"name": "open_part",
-     "description": "Open a STEP or IGES file. The solid is taken apart into a fixed blank plus features (holes, "
-                    "fillets, chamfers, movable flat faces) whose sizes become named parameters. Replaces the part "
-                    "that was open. Can take minutes for a complex part.",
+     "description": "Open a STEP or IGES file and list what could become a dimension (candidates: holes by "
+                    "diameter, fillets by radius, chamfers by size, movable flat faces). Quick; nothing is built yet: "
+                    "call make_dimensions with what the user wants to vary. Replaces the part that was open.",
      "input_schema": {"type": "object", "required": ["path"], "properties": {
          "path": {"type": "string", "description": "Full path of a .stp/.step/.igs/.iges file on this computer"}}}},
+    {"name": "make_dimensions",
+     "description": "Turn the chosen candidates into features with named parameters; only those are computed, the "
+                    "rest of the part stays as it is in the file (always checked to equal the file). Choose what the "
+                    "user wants to vary - a group of equal fillets is one choice. Replaces earlier dimensions and "
+                    "their changes. A few seconds to a minute per group; everything=true can take very long.",
+     "input_schema": {"type": "object", "properties": {
+         "groups": {"type": "array", "items": {"type": "string"},
+                    "description": "Group ids from the candidate list, e.g. [\"g2\", \"g5\"] (all members)"},
+         "items": {"type": "array", "items": {"type": "string"},
+                   "description": "Single candidates: a hole (h3), one fillet/chamfer face (b17), a flat face (p20)"},
+         "everything": {"type": "boolean", "description": "All candidates, flat faces chosen automatically (slow)"}}}},
     {"name": "get_part",
      "description": "Describe the open part: size, volume, and every feature with its number, place and parameters "
                     "(exact parameter names and current values). Call this before changing anything.",
@@ -42,7 +53,9 @@ TOOLS = [
          "category": {"type": "string", "enum": ["hole", "fillet", "chamfer", "face", "other"],
                       "description": "Only features of this kind"},
          "feature": {"type": "integer", "description": "Only the feature with this number"},
-         "density_g_cm3": _num("If given, the mass is reported too (steel 7.85, aluminium 2.70)")}}},
+         "density_g_cm3": _num("If given, the mass is reported too (steel 7.85, aluminium 2.70)"),
+         "candidates": {"type": "boolean", "description": "List the candidates (what could become a dimension) "
+                                                          "instead of the made dimensions"}}}},
     {"name": "set_values",
      "description": "Change parameters and rebuild the solid. Lengths in mm, angles in degrees. Earlier changes "
                     "stay unless replace=true. If the solid cannot be built with the new values, nothing is changed "
@@ -108,10 +121,39 @@ def g(v):
     return f"{float(v):.6g}"
 
 
-def _need(st):
-    if st.doc is None:
+def _need(st, dims=True):
+    if st.ref is None and st.doc is None:
         raise ToolError("No part is open. Call open_part with the path of a STEP file, or ask the user to open one "
                         "in the STEP Studio window.")
+    if dims and st.doc is None:
+        raise ToolError("No dimensions have been made yet. Call get_part to see the candidates, then make_dimensions "
+                        "with the groups or items the user wants to vary.")
+
+
+KIND_EN = {"hole": "hole", "fillet": "fillet", "chamfer": "chamfer", "face": "flat face"}
+
+
+def _candidates(st):
+    c, chosen = st.cands, set(st.selection)
+    out = [f"Candidates of {st.info['name']} ({len(st.ref.Faces)} faces). Groups (equal size together):"]
+    for g in c["groups"]:
+        n = len(g["items"])
+        size = f"D{g['size']:g}" if g["kind"] == "hole" else f"R{g['size']:g}" if g["kind"] == "fillet" else f"{g['size']:g} mm"
+        made = sum(1 for i in g["items"] if i in chosen)
+        out.append(f"  {g['id']}: {g['kind']} {size}, {n} {'holes' if g['kind'] == 'hole' else 'faces'}"
+                   + (f"  [dimension made for {made}]" if made else "") + "   items " + ", ".join(g["items"][:8])
+                   + (" ..." if n > 8 else ""))
+    planes = [it for it in c["items"] if it["kind"] == "face"]
+    if planes:
+        out.append(f"Movable flat faces ({len(planes)}; one item each, largest first):")
+        for it in sorted(planes, key=lambda x: -x["size"])[:25]:
+            out.append(f"  {it['id']}: facing {it['side'] or 'oblique'}, area {it['size']:g} mm2, centre "
+                       f"({', '.join(f'{v:g}' for v in it['at'])})" + ("  [dimension made]" if it["id"] in chosen else ""))
+        if len(planes) > 25:
+            out.append(f"  ... {len(planes) - 25} smaller ones")
+    if not c["items"]:
+        out.append("  none: no round holes, constant fillets / chamfers or movable flat faces were found")
+    return "\n".join(out)
 
 
 def _name(st, key):
@@ -163,12 +205,38 @@ def open_part(st, path):
     st.worker.busy = "open"
     st.open(path)
     i = st.info
-    st.note(f"파일 열기: {i['name']} (피처 {len(st.features)}개, {i['seconds']}초)")
-    return get_part(st)
+    st.note(f"파일 열기: {i['name']} (후보 {len(st.cands['items'])}개, {i['scan_seconds']}초)")
+    return _candidates(st) + "\nNothing is built yet. Ask the user what to vary if unclear, then call make_dimensions."
 
 
-def get_part(st, category=None, feature=None, density_g_cm3=None):
-    _need(st)
+def make_dimensions(st, groups=None, items=None, everything=False):
+    _need(st, dims=False)
+    by_g = {g["id"]: g for g in st.cands["groups"]}
+    known = {it["id"] for it in st.cands["items"]}
+    pick = []
+    for g in groups or []:
+        if g not in by_g:
+            raise ToolError(f"There is no group {g!r}; groups are " + ", ".join(by_g) + ".")
+        pick += by_g[g]["items"]
+    for i in items or []:
+        if i not in known:
+            raise ToolError(f"There is no candidate {i!r}. Call get_part with candidates=true for the ids.")
+        pick.append(i)
+    if not pick and not everything:
+        raise ToolError("Choose groups and/or items (or everything=true).")
+    st.worker.busy = "make"
+    st.make(pick, bool(everything))
+    i = st.info
+    st.note(f"치수 만들기: {'전부 자동' if everything else f'후보 {len(set(pick))}개'} → 피처 {len(st.features)}개 ({i['seconds']}초)")
+    extra = f"\nAlso made, because they sit on the rim of a chosen hole: {i['auto_added']} fillet/chamfer faces." \
+        if i.get("auto_added") else ""
+    return get_part(st) + extra
+
+
+def get_part(st, category=None, feature=None, density_g_cm3=None, candidates=False):
+    _need(st, dims=False)
+    if candidates or st.doc is None:
+        return _candidates(st) + ("" if st.doc is not None else "\nNo dimensions made yet: call make_dimensions.")
     s = st.state()
     i, m = s["info"], s["measure"]
     out = [f"Part: {i['name']}  (rebuilt solid identical to the file: {'yes' if i['identical'] else 'NO, differs by ' + str(i['xor_pct']) + '%'})"]
@@ -496,7 +564,7 @@ def export_step(st, file_name=None):
     return f"Saved {path}\nwith " + (", ".join(f"{k} = {g(v)}" for k, v in ch.items()) if ch else "the original values") + "."
 
 
-_FUNCS = {f.__name__: f for f in (open_part, get_part, set_values, reset_values, find_limits, plan_doe, run_doe,
+_FUNCS = {f.__name__: f for f in (open_part, make_dimensions, get_part, set_values, reset_values, find_limits, plan_doe, run_doe,
                                   doe_results, show_feature, label_features, export_step)}
 
 
