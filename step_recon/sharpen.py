@@ -508,6 +508,50 @@ _wedge.facets = 0
 _wedge.curved = 0
 
 
+def _round_piece(f, d, faces, adj, picked):
+    """What a round along a curved edge took away (convex) or added (hollow): the triangle chord - corner of each
+    section, clipped by the two side surfaces continued (exact) and by the faces at the ends. The chord lies on the far
+    side of the arc, so the piece holds the whole rounded region; the rest of it overlaps material (convex) or air
+    (hollow) and changes nothing."""
+    try:
+        i = d["face"]
+        others = _strip_others(i, faces, adj, picked, any_surface=True)
+        if others is None:
+            return None
+        (ea, fa, _), (eb, fb, _) = others[0], others[1]
+        tool = strip_tool(dict(d, kind="chamfer"), 1.0)
+        if tool is None:
+            return None
+        width = d["width"]
+        c = App.Vector(*d["probe"])
+        size, thick = f.BoundBox.DiagonalLength + 8.0 * width + 1e-3, 6.0 * width + 1e-3
+        w = tool
+        # each side surface thickened along the OTHER side face, away from the corner (as in _wedge): a spline flank
+        # cannot be continued past its end, and the corner lies beyond it
+        for (e1, g1, e2), (e, g) in (((eb, fb, ea), (ea, fa)), ((ea, fa, eb), (eb, fb))):
+            m1 = e1.valueAt((e1.FirstParameter + e1.LastParameter) / 2.0)
+            m2 = e2.valueAt((e2.FirstParameter + e2.LastParameter) / 2.0)
+            n1 = g1.normalAt(*g1.Surface.parameter(m1))
+            dvec = n1.cross(e1.tangentAt((e1.FirstParameter + e1.LastParameter) / 2.0))
+            if dvec.Length < 1e-9:
+                return None
+            dvec.normalize()
+            if dvec.dot(m1 - m2) < 0:
+                dvec = dvec * -1
+            side = _side_solid(g, e, _toward_strip(e, c), size, thick, dvec)
+            if side is None:
+                return None
+            w = w.common(side)
+        if not w.Solids or len(w.Solids) != 1:
+            return None
+        w = w.Solids[0]
+        if not w.isValid() or w.Volume < 1e-12 or w.Volume > 3.0 * width * width * ea.Length:
+            return None
+        return w
+    except Exception:
+        return None
+
+
 def _ring(i, faces, adj):
     """The ring a conical chamfer cut off between a coaxial cylinder (hole or shaft) and a flat face square to the
     axis: (solid, key, test point) or None. The key is the same for both halves of a cone stored as two faces."""
@@ -572,8 +616,22 @@ def fill_wedges(shape, face_ids, faces=None):
     add, cut, done = [], [], []
     rings = {}
     _wedge.facets = _wedge.curved = 0
+    rounds = {}
+    curved_ids = [i for i in picked if type(faces[i].Surface).__name__ not in ("Plane", "Cylinder", "Cone", "Toroid", "Sphere")]
+    if curved_ids:
+        try:
+            rounds = {d["face"]: d for d in strip_plan(shape, sorted(picked), faces) if d["kind"] == "fillet"}
+        except Exception:
+            rounds = {}
     for i in sorted(picked):
         f = faces[i]
+        if i in rounds:                             # a round along a curved edge: fill / cut its corner piece
+            w = _round_piece(f, rounds[i], faces, adj, picked)
+            if w is not None:
+                (add if rounds[i]["convex"] else cut).append(w)
+                done.append(i)
+                _wedge.curved += 1
+            continue
         if type(f.Surface).__name__ == "Cone":      # chamfer on the rim of a hole or the end of a shaft
             r = _ring(i, faces, adj)
             if r is not None:
@@ -646,14 +704,123 @@ def _closest(p1, d1, p2, d2):
     return (q1 + q2) * 0.5, (q1 - q2).Length, s, r
 
 
-def _strip_others(i, faces, adj, picked):
+def _sections(ea, fa, eb, fb, width, n):
+    """n cross-sections of a strip between edge ea (on face fa) and eb (on fb): points A on ea, B on eb and the corner
+    P where the two side faces, continued straight on from the edges, meet. None if they do not meet sensibly."""
+    t0, t1 = ea.FirstParameter, ea.LastParameter
+    ts = sorted(min(max(ea.Curve.parameter(v.Point), t0), t1) for v in eb.Vertexes)
+    if len(ts) != 2 or ts[1] - ts[0] < 0.3 * (t1 - t0):
+        return None
+    A, B, P = [], [], []
+    for k in range(n):
+        t = ts[0] + (ts[1] - ts[0]) * k / (n - 1.0)
+        a = ea.valueAt(t)
+        tb = min(max(eb.Curve.parameter(a), eb.FirstParameter), eb.LastParameter)
+        b = eb.valueAt(tb)
+        da = fa.normalAt(*fa.Surface.parameter(a)).cross(ea.tangentAt(t))
+        db = fb.normalAt(*fb.Surface.parameter(b)).cross(eb.tangentAt(tb))
+        if da.Length < 1e-9 or db.Length < 1e-9:
+            return None
+        da.normalize()
+        db.normalize()
+        if da.dot(b - a) < 0:
+            da = da * -1
+        if db.dot(a - b) < 0:
+            db = db * -1
+        hit = _closest(a, da, b, db)
+        if hit is None or hit[1] > 0.2 * width or hit[2] <= 0 or hit[3] <= 0 or max(hit[2], hit[3]) > 6 * width:
+            return None
+        A.append(a)
+        B.append(b)
+        P.append(hit[0])
+    return A, B, P
+
+
+def _arc_mid(f, a, b):
+    """The point of curved strip f half-way across, between a and b (nearest to the middle of the chord)."""
+    m = (a + b) * 0.5
+    u, v = f.Surface.parameter(m)
+    return f.valueAt(u, v)
+
+
+def fillet_radius(f, others):
+    """Radius of a round strip f whose cross-section is a circular arc tangent to both side faces (a fillet along a
+    curved edge: on a spline flank the kernel stores it as a spline surface), or None. others: [(edge, face, ...)]
+    longest first."""
+    (ea, fa), (eb, fb) = others[0][:2], others[1][:2]
+    width = f.Area / max(ea.Length, 1e-12)
+    sec = _sections(ea, fa, eb, fb, width, 5)
+    if sec is None:
+        return None
+    radii = []
+    for a, b, p in zip(*sec):
+        m = _arc_mid(f, a, b)
+        chord = (b - a).Length
+        if chord < 1e-9 or ((a + b) * 0.5 - m).Length < 0.05 * chord:
+            return None                              # flat across: a chamfer, not a round
+        la, lb = (a - p).Length, (b - p).Length
+        if abs(la - lb) > 0.03 * max(la, lb):
+            return None                              # unequal legs: not a constant-radius round
+        u, w = a - p, b - p
+        u.normalize()
+        w.normalize()
+        half = 0.5 * math.acos(max(-1.0, min(1.0, u.dot(w))))
+        if half < 1e-3 or half > 0.5 * math.pi - 1e-3:
+            return None
+        r = 0.5 * (la + lb) * math.tan(half)        # tangent at a and b: centre on the bisector
+        bis = u + w
+        bis.normalize()
+        c = p + bis * (0.5 * (la + lb) / math.cos(half))
+        if abs((m - c).Length - r) > 0.03 * r:
+            return None                              # middle not on that circle
+        radii.append(r)
+    if max(radii) - min(radii) > 0.02 * max(radii):
+        return None
+    return sum(radii) / len(radii)
+
+
+def curved_fillets(shape, faces=None, adj=None):
+    """{face number: radius} of the round strips along curved edges (see fillet_radius). Analytic rounds (cylinders,
+    tori) are found elsewhere (machined.find_blends)."""
+    faces = faces if faces is not None else shape.Faces
+    out = {}
+    cand = [i for i, f in enumerate(faces) if type(f.Surface).__name__ in ("BSplineSurface", "BezierSurface",
+            "SurfaceOfExtrusion", "SurfaceOfRevolution", "OffsetSurface") and 4 <= len(f.Edges) <= 8]
+    if not cand:
+        return out
+    adj = adj if adj is not None else _adjacent(faces)
+    # edge -> faces once: comparing every edge with every edge of a big neighbour (the end face of a gear with
+    # hundreds of edges) made this grow with the square of the size
+    emap = {}
+    for j in {j for i in cand for j in adj[i]} | set(cand):
+        for e in faces[j].Edges:
+            emap.setdefault(e.hashCode(), []).append((j, e))
+    for i in cand:
+        try:
+            others = _strip_others(i, faces, adj, set(), any_surface=True, emap=emap)
+            if others is None:
+                continue
+            r = fillet_radius(faces[i], others)
+            if r is not None:
+                out[i] = r
+        except Exception:
+            continue
+    return out
+
+
+def _strip_others(i, faces, adj, picked, any_surface=False, emap=None):
     """[(edge, neighbour face, its number)] for strip i, longest edges first, or None if it is not a simple strip."""
     f = faces[i]
-    if type(f.Surface).__name__ in ("Cylinder", "Toroid", "Sphere", "Cone") or not 4 <= len(f.Edges) <= 8:
+    if not any_surface and type(f.Surface).__name__ in ("Cylinder", "Toroid", "Sphere", "Cone"):
+        return None
+    if not 4 <= len(f.Edges) <= 8:
         return None
     others = []
     for e in f.Edges:
-        hit = [j for j in adj[i] if any(e.isSame(x) for x in faces[j].Edges)]
+        if emap is not None:
+            hit = sorted({j for j, x in emap.get(e.hashCode(), ()) if j != i and j in adj[i] and e.isSame(x)})
+        else:
+            hit = [j for j in adj[i] if any(e.isSame(x) for x in faces[j].Edges)]
         if len(hit) != 1:
             return None
         others.append((e, faces[hit[0]], hit[0]))
@@ -677,46 +844,22 @@ def strip_plan(shape, face_ids, faces=None):
 
     for i in sorted(picked):
         try:
-            others = _strip_others(i, faces, adj, picked)
+            others = _strip_others(i, faces, adj, picked, any_surface=True)
             if others is None:
                 continue
             f = faces[i]
+            if type(f.Surface).__name__ in ("Cylinder", "Toroid", "Sphere", "Cone"):
+                continue                            # analytic rounds: PartDesign's fillet takes those
             (ea, fa, _), (eb, fb, _) = others[0], others[1]
             width = f.Area / max(ea.Length, 1e-12)
-            # the stretch of ea that has eb opposite
-            t0, t1 = ea.FirstParameter, ea.LastParameter
-            ts = sorted(min(max(ea.Curve.parameter(v.Point), t0), t1) for v in eb.Vertexes)
-            if len(ts) != 2 or ts[1] - ts[0] < 0.3 * (t1 - t0):
-                continue
             straight = type(ea.Curve).__name__ == "Line" and type(eb.Curve).__name__ == "Line"
             n = 3 if straight else 13
-            A, B, P = [], [], []
-            ok = True
-            for k in range(n):
-                t = ts[0] + (ts[1] - ts[0]) * k / (n - 1.0)
-                a = ea.valueAt(t)
-                tb = min(max(eb.Curve.parameter(a), eb.FirstParameter), eb.LastParameter)
-                b = eb.valueAt(tb)
-                da = fa.normalAt(*fa.Surface.parameter(a)).cross(ea.tangentAt(t))
-                db = fb.normalAt(*fb.Surface.parameter(b)).cross(eb.tangentAt(tb))
-                if da.Length < 1e-9 or db.Length < 1e-9:
-                    ok = False
-                    break
-                da.normalize()
-                db.normalize()
-                if da.dot(b - a) < 0:
-                    da = da * -1
-                if db.dot(a - b) < 0:
-                    db = db * -1
-                hit = _closest(a, da, b, db)
-                if hit is None or hit[1] > 0.2 * width or hit[2] <= 0 or hit[3] <= 0 or max(hit[2], hit[3]) > 6 * width:
-                    ok = False
-                    break
-                A.append(a)
-                B.append(b)
-                P.append(hit[0])
-            if not ok:
+            radius = fillet_radius(f, others)
+            sec = _sections(ea, fa, eb, fb, width, n)
+            if sec is None:
                 continue
+            A, B, P = sec
+            M = [_arc_mid(f, a, b) for a, b in zip(A, B)] if radius else None
             ends = []
             c = f.CenterOfMass
             for e, g, _ in others[2:]:
@@ -730,13 +873,19 @@ def strip_plan(shape, face_ids, faces=None):
                     nn, dd = nn * -1, -dd
                 ends.append([nn.x, nn.y, nn.z, dd])
             mid = len(A) // 2
-            probe = (A[mid] + B[mid] + P[mid]) * (1.0 / 3.0)
+            # a point of what the strip took away (or added): for a round between its arc and the corner
+            probe = (M[mid] + P[mid]) * 0.5 if radius else (A[mid] + B[mid] + P[mid]) * (1.0 / 3.0)
             leg = sum((A[k] - P[k]).Length + (B[k] - P[k]).Length for k in range(n)) / (2.0 * n)
+            if radius is None and any(((A[k] + B[k]) * 0.5 - _arc_mid(f, A[k], B[k])).Length > 0.05 * (B[k] - A[k]).Length
+                                      for k in (0, n // 2, n - 1)):
+                continue                            # round but not a circle of constant radius: not handled
             overlap = sum((A[k + 1] - A[k]).Length for k in range(n - 1))
             out.append({"face": i, "a": [r6(v) for v in A], "b": [r6(v) for v in B], "p": [r6(v) for v in P],
                         "ends": [[round(x, 9) for x in e] for e in ends], "convex": not shape.isInside(probe, 1e-7, False),
                         "leg": leg, "width": width, "slack": max(ea.Length - overlap, 0.0), "probe": r6(probe),
-                        "straight": straight, "reach": f.BoundBox.DiagonalLength})
+                        "straight": straight, "reach": f.BoundBox.DiagonalLength,
+                        "kind": "fillet" if radius else "chamfer", "size": radius if radius else leg,
+                        **({"m": [r6(v) for v in M]} if radius else {})})
         except Exception:
             continue
     return out
@@ -748,6 +897,8 @@ def strip_tool(d, k):
     A, B, P = ([V(*v) for v in d[q]] for q in ("a", "b", "p"))
     n = len(A)
     grow = max(k, 1.0)
+    if d.get("kind") == "fillet":
+        return _round_tool(d, k, A, B, P, [V(*v) for v in d["m"]], grow)
     secs = []
     for i in range(n):
         a, b = P[i] + (A[i] - P[i]) * k, P[i] + (B[i] - P[i]) * k
@@ -764,6 +915,52 @@ def strip_tool(d, k):
     last = tuple(x + t1 * ext for x in secs[-1])
     secs = [first, last] if d.get("straight") else [first] + secs + [last]
     wires = [Part.makePolygon([s[0], s[1], s[2], s[0]]) for s in secs]
+    tool = Part.makeLoft(wires, True, bool(d.get("straight")))
+    if tool.Volume < 0:
+        tool.reverse()
+    size = d["reach"] + 2 * ext + 8.0 * d["width"] * grow
+    c = V(*d["probe"])
+    for nx, ny, nz, dd in d["ends"]:
+        nn = V(nx, ny, nz)
+        inside = c if nn.dot(c) - dd > 1e-9 else c + nn * (1e-6 + dd - nn.dot(c))
+        tool = tool.common(_half_space((nn, dd), inside, size))
+    if not tool.Solids:
+        return None
+    return tool.Solids[0] if len(tool.Solids) == 1 else max(tool.Solids, key=lambda s: s.Volume)
+
+
+def _round_tool(d, k, A, B, P, M, grow):
+    """strip_tool for a round: each section is the region between the corner and the arc (scaled by k about the
+    corner), widened outwards past the side faces so that no face of the tool lies on a face of the part."""
+    V = App.Vector
+    wires = []
+    ext = d["slack"] + 4.0 * d["width"] * grow + 1e-3
+    t0, t1 = P[0] - P[1], P[-1] - P[-2]
+    t0.normalize()
+    t1.normalize()
+    idx = list(range(len(A)))
+    stations = [(0, t0 * ext)] + [(i, V()) for i in idx] + [(len(A) - 1, t1 * ext)]
+    if d.get("straight"):
+        stations = [stations[0], stations[-1]]
+    for i, shift in stations:
+        p = P[i]
+        a, b, m = p + (A[i] - p) * k, p + (B[i] - p) * k, p + (M[i] - p) * k
+        u, w = a - p, b - p
+        leg = 0.5 * (u.Length + w.Length)
+        u.normalize()
+        w.normalize()
+        na = (w - u * w.dot(u)) * -1
+        nb = (u - w * u.dot(w)) * -1
+        na.normalize()
+        nb.normalize()
+        e = 0.5 * leg + 1e-3
+        bis = u + w
+        bis.normalize()
+        a_out, b_out, p_far = a + na * e, b + nb * e, p - bis * (leg + e)
+        pts = [x + shift for x in (a, m, b, b_out, p_far, a_out)]
+        arc = Part.Arc(pts[0], pts[1], pts[2]).toShape()
+        wires.append(Part.Wire([arc, Part.makeLine(pts[2], pts[3]), Part.makeLine(pts[3], pts[4]),
+                                Part.makeLine(pts[4], pts[5]), Part.makeLine(pts[5], pts[0])]))
     tool = Part.makeLoft(wires, True, bool(d.get("straight")))
     if tool.Volume < 0:
         tool.reverse()

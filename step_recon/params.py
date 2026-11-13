@@ -77,7 +77,8 @@ def collect(doc):
         if o.Name in movers:
             continue
         if hasattr(o, "SR_StripData"):      # chamfer strips cut by a tool (sharpen.apply_strips): one size for all
-            add(f"{_clean(o.Label)}.Size", float(o.SR_Size), "length", obj=o.Name, prop="SR_Size")
+            prop = "Radius" if getattr(o, "SR_Kind", "") == "fillet" else "Size"
+            add(f"{_clean(o.Label)}.{prop}", float(o.SR_Size), "length", obj=o.Name, prop="SR_Size")
             continue
         if t in FEATURE_PROPS:
             label = _clean(o.Label)

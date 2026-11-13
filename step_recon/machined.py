@@ -791,18 +791,21 @@ def _strips_by_tool(sess, ref, blend_faces, report, plans=None):
             return None
         groups = {}
         for d in plans:
-            groups.setdefault(round(d["leg"], 2), []).append(d)
+            kind = d.get("kind", "chamfer")
+            groups.setdefault((kind, round(d.get("size", d["leg"]), 3 if kind == "fillet" else 2)), []).append(d)
         made = []
-        for size, ds in sorted(groups.items()):
+        for (kind, size), ds in sorted(groups.items()):
             o = sess.doc.addObject("App::FeaturePython", "StripChamfer")
             o.addProperty("App::PropertyString", "SR_StripData", "steprecon", "the strips: sections along each one")
             o.addProperty("App::PropertyFloat", "SR_Size", "steprecon", "chamfer size")
             o.addProperty("App::PropertyFloat", "SR_Size0", "steprecon", "chamfer size in the file")
             o.addProperty("App::PropertyString", "SR_Body", "steprecon", "the body it is cut from")
+            o.addProperty("App::PropertyString", "SR_Kind", "steprecon", "chamfer or fillet")
+            o.SR_Kind = kind
             o.SR_StripData = json.dumps(ds, separators=(",", ":"))
             o.SR_Size = o.SR_Size0 = float(size)
             o.SR_Body = sess.body.Name
-            o.Label = f"Chamfer_{size:g}" + (f"_x{len(ds)}" if len(ds) > 1 else "")
+            o.Label = (f"Fillet_R{size:g}" if kind == "fillet" else f"Chamfer_{size:g}") + (f"_x{len(ds)}" if len(ds) > 1 else "")
             made.append(o)
         s = sess.result_shape()
         c = {}
@@ -811,7 +814,9 @@ def _strips_by_tool(sess, ref, blend_faces, report, plans=None):
             if not c.get("converged"):
                 c = cmp_mod.compare(ref, s)
         if c.get("converged") or c.get("near"):
-            report["chamfers_made"] += len(plans)
+            nf = sum(1 for d in plans if d.get("kind") == "fillet")
+            report["fillets_made"] += nf
+            report["chamfers_made"] += len(plans) - nf
             report["features"] += len(made)
             report["strip_tools"] = len(plans)
             report["_refused"] = set()      # what the kernel's chamfer refused is covered now
@@ -934,6 +939,15 @@ def _odd_rim(shape, nb, hole_faces, known, faces=None):
             if j not in known and j not in hole_faces and type(faces[j].Surface).__name__ not in ("Plane", "Cylinder")}
 
 
+def _curved_rounds(ref, nb, faces):
+    """{face: radius} of rounds along curved edges, which find_blends (analytic surfaces only) does not see."""
+    try:
+        adj = [{j for _, j in nb[i]} for i in range(len(faces))]
+        return sharpen.curved_fillets(ref, faces, adj)
+    except Exception:
+        return {}
+
+
 def scan(ref):
     """What could become a parameter, without building anything (well under a second for most parts).
 
@@ -977,6 +991,10 @@ def scan(ref):
                 else:
                     item["size"] = round((big + small) / 2, 3)
             add(item, (key[0], item["size"], item.get("size2")))
+    for i, r in sorted(_curved_rounds(ref, nb, faces).items()):     # rounds along curved edges (spline flanks)
+        if i not in blend_faces:
+            blend_faces.add(i)
+            add({"id": f"b{i}", "kind": "fillet", "faces": [i], "size": round(r, 4)}, ("fillet", round(r, 4), None))
     for i, f in enumerate(faces):
         if i in blend_faces or type(f.Surface).__name__ != "Plane" or not nb[i]:
             continue
@@ -1185,6 +1203,11 @@ def build_selected(ref, holes=(), blend_faces=(), planes=(), progress=None):
                             if j in known and j not in chosen:
                                 chosen.add(j)
                                 added.append(j)
+        known_all = {i for ids in found.values() for i in ids}
+        if chosen - known_all:
+            for i, r in _curved_rounds(ref, _neighbours(ref), ref.Faces).items():
+                if i in chosen and i not in known_all:
+                    found.setdefault(("fillet", round(r, 4)), []).append(i)
         blends = {k: sorted(i for i in ids if i in chosen) for k, ids in found.items()}
         blends = {k: v for k, v in blends.items() if v}
         sess, report = _build(ref, blends, holes, sorted(set(planes)))

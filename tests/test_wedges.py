@@ -128,6 +128,35 @@ s3 = P.result_shape(doc3)
 report("spline strips 0.35 -> 0.7 after saving and opening: valid, smaller", bool(sz) and not P.problems(doc3) and s3.isValid()
        and s3.Volume < v3 - 5.0, f"{[p['name'] for p in sz]} {s3.Volume - v3:+.2f} mm3" if s3 is not None else str(P.problems(doc3)))
 App.closeDocument(doc3.Name)
+# ------------------------------------------------------------ rounds along the curved flanks
+ftips = [e for e in body.Edges if type(e.Curve).__name__ == "Line" and abs(e.Vertexes[0].Point.z - e.Vertexes[1].Point.z) > W - 3 - 1e-6
+         and abs(math.hypot(e.Vertexes[0].Point.x, e.Vertexes[0].Point.y) - 40.0) < 1e-6]
+fg = body.makeFillet(0.4, ftips)
+scf = machined.scan(fg)
+fgr = [g for g in scf["groups"] if g["kind"] == "fillet"]
+report("rounds along spline flanks are found as fillets R0.4", len(fgr) == 1 and abs(fgr[0]["size"] - 0.4) < 1e-3
+       and len(fgr[0]["items"]) == len(ftips), str([(g["kind"], g["size"], len(g["items"])) for g in scf["groups"]]))
+fids = [it["faces"][0] for it in scf["items"] if fgr and it["id"] in set(fgr[0]["items"])]
+res = machined.remove_faces_ex(fg, fids)
+report("those rounds removed: the sharp part (seam lines stay)", res["failed"] == 0 and res["shape"].isValid()
+       and abs(res["shape"].Volume - body.Volume) < 1e-2, f"{res['method']} {res['shape'].Volume - body.Volume:+.4f} mm3")
+t0 = time.time()
+sess4, rep4 = machined.build_selected(fg, [], fids, [])
+c4 = sess4.compare()
+report("those rounds as a parameter: equals the file", (c4.get("converged") or c4.get("near")) and rep4.get("strip_tools") == len(fids)
+       and rep4["fillets_made"] == len(fids), f"{time.time() - t0:.1f}s xor {c4.get('xor_pct')}")
+pl4 = P.collect(sess4.doc)
+rn = [p["name"] for p in pl4 if p["name"].startswith("Fillet_R0_4") and p["name"].endswith(".Radius")]
+v4 = P.result_shape(sess4.doc).Volume
+P.apply(sess4.doc, pl4, {rn[0]: 0.8} if rn else {})
+s4 = P.result_shape(sess4.doc)
+true8 = body.makeFillet(0.8, ftips).Volume
+# the sections are scaled about the corner of the TANGENT lines; the flank bends away from them, so the larger the
+# change, the further from a true fillet (here 8% of the volume change for twice the radius)
+report("R0.4 -> 0.8: close to a true R0.8 fillet", bool(rn) and s4 is not None and s4.isValid()
+       and abs(s4.Volume - true8) < 0.10 * abs(v4 - true8), f"{rn} {s4.Volume - true8:+.4f} mm3 off (change {s4.Volume - v4:+.3f})"
+       if s4 is not None else str(P.problems(sess4.doc)))
+App.closeDocument(sess4.doc.Name)
 # ------------------------------------------------------------ bolt holes: conical chamfers on the rims
 plain = Part.makeBox(120, 90, 20).fuse(Part.makeCylinder(12, 15, V(60, 45, 20))).removeSplitter()      # block with a boss
 centres = [(15 + 18 * i, 12 + 22 * j) for i in range(6) for j in range(4) if not (40 < 15 + 18 * i < 80 and 30 < 12 + 22 * j < 60)]

@@ -49,7 +49,7 @@ def _features(doc, plist):
             if hasattr(feat, "SR_StripData"):       # chamfer strips cut by a tool: their corner lines
                 import json
                 import Part
-                kind = "Chamfer"
+                kind = "Fillet" if getattr(feat, "SR_Kind", "") == "fillet" else "Chamfer"
                 for d in json.loads(feat.SR_StripData):
                     pts = [App.Vector(*v) for v in d["p"]]
                     edges.append(Part.makePolygon(pts) if len(pts) > 2 else Part.makeLine(pts[0], pts[-1]))
