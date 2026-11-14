@@ -348,6 +348,44 @@ def _half_space(plane, inside, size):
     return Part.makePlane(2 * size, 2 * size, corner, n, x).extrude(n * size)
 
 
+def _wide_face(g):
+    """The surface of face g as a face reaching past the trimmed face where the surface allows (a spline flank stops
+    at its own end; a cylinder may run on past its seam, but not round more than once). None if it cannot be made."""
+    try:
+        srf = g.Surface
+        u0, u1, v0, v1 = g.ParameterRange
+        du, dv = (u1 - u0), (v1 - v0)
+        try:
+            b0, b1, c0, c1 = srf.bounds()
+            pu = srf.isUPeriodic() and srf.UPeriod() > 0
+            pv = srf.isVPeriodic() and srf.VPeriod() > 0
+        except Exception:
+            b0 = b1 = c0 = c1 = None
+            pu = pv = False
+
+        def span(lo, hi, d, grow, blo, bhi, periodic, period):
+            a_, b_ = lo - grow * d, hi + grow * d
+            if periodic:
+                extra = max(0.0, (b_ - a_) - 0.95 * period)
+                return a_ + extra / 2, b_ - extra / 2
+            return (max(a_, blo) if blo is not None else a_), (min(b_, bhi) if bhi is not None else b_)
+
+        # a narrow face (the land between the roots of two teeth) needs several times its own width: the corner lies
+        # beyond its end
+        for grow in (3.0, 1.0, 0.5, 0.2, 0.05):
+            try:
+                ua, ub = span(u0, u1, du, grow, b0, b1, pu, srf.UPeriod() if pu else 0)
+                va, vb = span(v0, v1, dv, grow, c0, c1, pv, srf.VPeriod() if pv else 0)
+                wide = srf.toShape(ua, ub, va, vb)
+                if wide is not None and not wide.isNull() and wide.isValid():
+                    return wide
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return None
+
+
 def _side_solid(g, edge, inside, size, thick=None, direction=None):
     """The region on the `inside` side of face g's surface, near `edge`, as a solid: a half-space for a plane; for a
     curved face (cylinder, extruded profile, spline: the flank of a tooth) its surface, widened where it can be,
@@ -364,36 +402,7 @@ def _side_solid(g, edge, inside, size, thick=None, direction=None):
             n = n * -1
         if direction is not None:               # thicken along this direction instead of the normal
             n = direction
-        u0, u1, v0, v1 = g.ParameterRange
-        du, dv = (u1 - u0), (v1 - v0)
-        wide = None
-        try:
-            b0, b1, c0, c1 = srf.bounds()
-            pu = srf.isUPeriodic() and srf.UPeriod() > 0
-            pv = srf.isVPeriodic() and srf.VPeriod() > 0
-        except Exception:
-            b0 = b1 = c0 = c1 = None
-            pu = pv = False
-
-        def span(lo, hi, d, grow, blo, bhi, periodic, period):
-            a_, b_ = lo - grow * d, hi + grow * d
-            if periodic:                        # a cylinder may run on past its seam, but not round more than once
-                extra = max(0.0, (b_ - a_) - 0.95 * period)
-                return a_ + extra / 2, b_ - extra / 2
-            return (max(a_, blo) if blo is not None else a_), (min(b_, bhi) if bhi is not None else b_)
-
-        # the surface usually reaches past the trimmed face: use more of it. A narrow face (the land between the roots
-        # of two teeth) needs several times its own width: the corner lies beyond its end
-        for grow in (3.0, 1.0, 0.5, 0.2, 0.05):
-            try:
-                ua, ub = span(u0, u1, du, grow, b0, b1, pu, srf.UPeriod() if pu else 0)
-                va, vb = span(v0, v1, dv, grow, c0, c1, pv, srf.VPeriod() if pv else 0)
-                wide = srf.toShape(ua, ub, va, vb)
-                if wide is not None and not wide.isNull() and wide.isValid():
-                    break
-                wide = None
-            except Exception:
-                wide = None
+        wide = _wide_face(g)
         if wide is None or wide.isNull():
             return None
         slab = wide.extrude(n * (thick or size))
@@ -526,11 +535,15 @@ _wedge.facets = 0
 _wedge.curved = 0
 
 
-def _round_piece(f, d, faces, adj, picked, emap=None):
+def _round_piece(f, d, faces, adj, picked, emap=None, mode="split"):
     """What a round along a curved edge took away (convex) or added (hollow): the triangle chord - corner of each
     section, clipped by the two side surfaces continued (exact) and by the faces at the ends. The chord lies on the far
     side of the arc, so the piece holds the whole rounded region; the rest of it overlaps material (convex) or air
-    (hollow) and changes nothing."""
+    (hollow) and changes nothing.
+    mode "split": the triangle cut by the two side surfaces (continued), keeping the cell that holds the round - exact
+    wherever the side surfaces reach the corner (a full-round root between two curved flanks; a land continued to the
+    flank). "normal" / "other": each side surface thickened along its own normal / along the other side face, a
+    fallback where a side surface ends short of the corner."""
     try:
         i = d["face"]
         others = _strip_others(i, faces, adj, picked, any_surface=True, emap=emap)
@@ -542,6 +555,31 @@ def _round_piece(f, d, faces, adj, picked, emap=None):
             return None
         width = d["width"]
         c = App.Vector(*d["probe"])
+        if mode == "split":
+            wa, wb = _wide_face(fa), _wide_face(fb)
+            if wa is None or wb is None:
+                return None
+            cells = [x for x in tool.generalFuse([wa, wb])[0].Solids if x.BoundBox.isInside(c)]
+            cells = [x for x in cells if x.isInside(c, 1e-7, False)]
+            if len(cells) != 1:
+                return None
+            w = cells[0]
+            if not w.isValid() or w.Volume < 1e-12 or w.Volume > 3.0 * width * width * ea.Length                     or w.Volume > tool.Volume * (1 - 1e-6):     # the side surfaces did not cut it: not a corner piece
+                return None
+
+            def bounded_by(wide):
+                for x in w.Faces:
+                    try:
+                        u, v = x.Surface.parameter(x.CenterOfMass) if hasattr(x.Surface, "parameter") else (0, 0)
+                        if wide.distToShape(Part.Vertex(x.valueAt(u, v)))[0] < 1e-6:
+                            return True
+                    except Exception:
+                        continue
+                return False
+            # both side surfaces must close the cell (one that ends inside the triangle lets it run round its end)
+            if not (bounded_by(wa) and bounded_by(wb)):
+                return None
+            return w
         size, thick = f.BoundBox.DiagonalLength + 8.0 * width + 1e-3, 6.0 * width + 1e-3
         w = tool
         # each side surface thickened along the OTHER side face, away from the corner (as in _wedge): a spline flank
@@ -556,7 +594,7 @@ def _round_piece(f, d, faces, adj, picked, emap=None):
             dvec.normalize()
             if dvec.dot(m1 - m2) < 0:
                 dvec = dvec * -1
-            side = _side_solid(g, e, _toward_strip(e, c), size, thick, dvec)
+            side = _side_solid(g, e, _toward_strip(e, c), size, thick, None if mode == "normal" else dvec)
             if side is None:
                 return None
             w = w.common(side)
@@ -646,13 +684,7 @@ def fill_wedges(shape, face_ids, faces=None):
     emap = _edge_map(faces, adj, list(rounds)) if rounds else None
     for i in sorted(picked):
         f = faces[i]
-        if i in rounds:                             # a round along a curved edge: fill / cut its corner piece
-            w = _round_piece(f, rounds[i], faces, adj, picked, emap)
-            if w is not None:
-                (add if rounds[i]["convex"] else cut).append(w)
-                loose.append(w)
-                done.append(i)
-                _wedge.curved += 1
+        if i in rounds:                             # rounds along curved edges: below, two ways
             continue
         if type(f.Surface).__name__ == "Cone":      # chamfer on the rim of a hole or the end of a shaft
             r = _ring(i, faces, adj)
@@ -682,6 +714,38 @@ def fill_wedges(shape, face_ids, faces=None):
         c = w.CenterOfMass
         (cut if shape.isInside(c, 1e-7, False) else add).append(w)
         done.append(i)
+    if not rounds:
+        return _settle(shape, faces, add, cut, done, loose, len(rings))
+    best = (None, [])
+    for mode in ("split", "normal", "other"):
+        a2, c2, l2, d2 = list(add), list(cut), [], list(done)
+        _wedge.curved = 0
+        for i in sorted(rounds):
+            w = _round_piece(faces[i], rounds[i], faces, adj, picked, emap, mode=mode)
+            if w is not None:
+                (a2 if rounds[i]["convex"] else c2).append(w)
+                l2.append(w)
+                d2.append(i)
+                _wedge.curved += 1
+        if not l2:
+            continue
+        res = _settle(shape, faces, a2, c2, d2, l2, len(rings))
+        # both ways stop at the side surfaces, so neither takes too much: the one that changes more left less behind
+        if res[0] is not None and (best[0] is None or len(res[1]) > len(best[1]) or (len(res[1]) == len(best[1]) and
+                                   abs(res[0].Volume - shape.Volume) > abs(best[0].Volume - shape.Volume) + 1e-9)):
+            best = res
+        if mode == "split" and best[0] is not None and len(best[1]) == len(done) + len(rounds):
+            break                                   # every round cut exactly along its own sides: nothing to better
+    if best[0] is not None:
+        return best
+    if done:                                        # the rounds did not work out: the rest on its own
+        _wedge.curved = 0
+        best = _settle(shape, faces, add, cut, done, loose, len(rings))
+    return best
+
+
+def _settle(shape, faces, add, cut, done, loose, n_rings):
+    """fill_wedges: put the pieces in / take them out and check the result."""
     if not done:
         return None, []
     try:
@@ -707,7 +771,7 @@ def fill_wedges(shape, face_ids, faces=None):
             out = refined
         # curved neighbours are not merged with the piece that continues them (a seam line stays along the old chamfer),
         # and a tangent-plane end leaves a facet: allow for those, but not for anything else
-        if len(out.Faces) > len(faces) - len(done) + len(rings) + 2 * _wedge.facets + 3 * _wedge.curved:
+        if len(out.Faces) > len(faces) - len(done) + n_rings + 2 * _wedge.facets + 3 * _wedge.curved:
             return None, []         # pieces did not close cleanly against the neighbours (slivers left): not this way
         return out, done
     except Exception:

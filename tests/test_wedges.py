@@ -263,8 +263,8 @@ rids = [it["faces"][0] for it in scr["items"] if rgr and it["id"] in set(rgr[0][
 t0 = time.time()
 res = machined.remove_faces_ex(rg, rids)
 took_r = rg.Volume - rb.Volume
-report("ring gear: root rounds removed (a thin sliver may stay where the flank cannot be continued)", res["failed"] == 0
-       and res["shape"].isValid() and abs(res["shape"].Volume - rb.Volume) < 0.03 * took_r,
+report("ring gear: root rounds removed back to the sharp corners", res["failed"] == 0
+       and res["shape"].isValid() and abs(res["shape"].Volume - rb.Volume) < 1e-3 * took_r,
        f"{time.time() - t0:.1f}s {res['method']} {res['shape'].Volume - rb.Volume:+.4f} of {took_r:.3f} mm3")
 t0 = time.time()
 sess5, rep5 = machined.build_selected(rg, [], rids, [])
@@ -279,4 +279,51 @@ s5 = P.result_shape(sess5.doc)
 report("ring gear: R0.5 -> 0.3 gives a valid part with less material in the roots", bool(rn5) and s5 is not None and s5.isValid()
        and s5.Volume < v5, f"{rn5} {s5.Volume - v5:+.3f} mm3" if s5 is not None else str(P.problems(sess5.doc)))
 App.closeDocument(sess5.doc.Name)
+
+
+# ------------------------------------------------- ring gear with a full-round root: one R0.5 per tooth space, no land
+def round_root_gear(z=20, rv=42.55, rtip=40.0, r=0.5):
+    d = 2 * math.pi / z
+    h = rv - rtip
+    pt = lambda rad, a: V(rad * math.cos(a), rad * math.sin(a), 0)  # noqa: E731
+    es = []
+    for i in range(z):
+        a = i * d
+        es.append(Part.makeLine(pt(rtip, a), pt(rtip, a + 0.25 * d)))
+        c1 = Part.BSplineCurve()
+        c1.interpolate([pt(rtip, a + 0.25 * d), pt(rtip + 0.35 * h, a + 0.335 * d), pt(rtip + 0.7 * h, a + 0.415 * d), pt(rv, a + 0.5 * d)])
+        es.append(c1.toShape())
+        c2 = Part.BSplineCurve()
+        c2.interpolate([pt(rv, a + 0.5 * d), pt(rtip + 0.7 * h, a + 0.585 * d), pt(rtip + 0.35 * h, a + 0.665 * d), pt(rtip, a + 0.75 * d)])
+        es.append(c2.toShape())
+        es.append(Part.makeLine(pt(rtip, a + 0.75 * d), pt(rtip, a + d)))
+    b = Part.makeCylinder(60, W).cut(Part.Face(Part.Wire(es)).extrude(V(0, 0, W)))
+    roots = [e for e in b.Edges if e.BoundBox.ZLength > W - 1e-6 and abs(math.hypot(e.Vertexes[0].Point.x, e.Vertexes[0].Point.y) - rv) < 1e-6]
+    return b, b.makeFillet(r, roots), len(roots)
+
+
+vb, vg, nv = round_root_gear()
+scv = machined.scan(vg)
+vgr = [x for x in scv["groups"] if x["kind"] == "fillet"]
+report("full-round root: one fillet R0.5 per tooth space", [(x["size"], len(x["items"])) for x in vgr] == [(0.5, nv)],
+       str([(x["kind"], x["size"], len(x["items"])) for x in scv["groups"]]))
+vids = [it["faces"][0] for it in scv["items"] if vgr and it["id"] in set(vgr[0]["items"])]
+t0 = time.time()
+res = machined.remove_faces_ex(vg, vids)
+took_v = vg.Volume - vb.Volume
+report("full-round root: removed back to the sharp V, exact", res["failed"] == 0 and res["shape"] is not None
+       and res["shape"].isValid() and abs(res["shape"].Volume - vb.Volume) < 1e-3 * took_v,
+       f"{time.time() - t0:.1f}s {res['method']} " + (f"{res['shape'].Volume - vb.Volume:+.4f} of {took_v:.3f} mm3" if res["shape"] is not None else ""))
+t0 = time.time()
+sess6, rep6 = machined.build_selected(vg, [], vids, [])
+report("full-round root: as a parameter", rep6.get("strip_tools") == len(vids) and rep6["fillets_made"] == len(vids),
+       f"{time.time() - t0:.1f}s {rep6.get('skipped')}")
+pl6 = P.collect(sess6.doc)
+rn6 = [p["name"] for p in pl6 if p["name"].endswith(".Radius")]
+v6 = P.result_shape(sess6.doc).Volume
+P.apply(sess6.doc, pl6, {rn6[0]: 0.3} if rn6 else {})
+s6 = P.result_shape(sess6.doc)
+report("full-round root: R0.5 -> 0.3 gives a valid part with less material in the roots", bool(rn6) and s6 is not None
+       and s6.isValid() and s6.Volume < v6, f"{rn6} {s6.Volume - v6:+.3f} mm3" if s6 is not None else str(P.problems(sess6.doc)))
+App.closeDocument(sess6.doc.Name)
 sys.exit(1 if fails else 0)
