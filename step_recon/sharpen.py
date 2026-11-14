@@ -367,13 +367,31 @@ def _side_solid(g, edge, inside, size, thick=None, direction=None):
         u0, u1, v0, v1 = g.ParameterRange
         du, dv = (u1 - u0), (v1 - v0)
         wide = None
-        for grow in (0.5, 0.2, 0.05):           # the surface usually reaches past the trimmed face: use more of it
+        try:
+            b0, b1, c0, c1 = srf.bounds()
+            pu = srf.isUPeriodic() and srf.UPeriod() > 0
+            pv = srf.isVPeriodic() and srf.VPeriod() > 0
+        except Exception:
+            b0 = b1 = c0 = c1 = None
+            pu = pv = False
+
+        def span(lo, hi, d, grow, blo, bhi, periodic, period):
+            a_, b_ = lo - grow * d, hi + grow * d
+            if periodic:                        # a cylinder may run on past its seam, but not round more than once
+                extra = max(0.0, (b_ - a_) - 0.95 * period)
+                return a_ + extra / 2, b_ - extra / 2
+            return (max(a_, blo) if blo is not None else a_), (min(b_, bhi) if bhi is not None else b_)
+
+        # the surface usually reaches past the trimmed face: use more of it. A narrow face (the land between the roots
+        # of two teeth) needs several times its own width: the corner lies beyond its end
+        for grow in (3.0, 1.0, 0.5, 0.2, 0.05):
             try:
-                b0, b1, c0, c1 = srf.bounds()
-                wide = srf.toShape(max(u0 - grow * du, b0), min(u1 + grow * du, b1),
-                                   max(v0 - grow * dv, c0), min(v1 + grow * dv, c1))
-                if wide is not None and not wide.isNull():
+                ua, ub = span(u0, u1, du, grow, b0, b1, pu, srf.UPeriod() if pu else 0)
+                va, vb = span(v0, v1, dv, grow, c0, c1, pv, srf.VPeriod() if pv else 0)
+                wide = srf.toShape(ua, ub, va, vb)
+                if wide is not None and not wide.isNull() and wide.isValid():
                     break
+                wide = None
             except Exception:
                 wide = None
         if wide is None or wide.isNull():
@@ -508,14 +526,14 @@ _wedge.facets = 0
 _wedge.curved = 0
 
 
-def _round_piece(f, d, faces, adj, picked):
+def _round_piece(f, d, faces, adj, picked, emap=None):
     """What a round along a curved edge took away (convex) or added (hollow): the triangle chord - corner of each
     section, clipped by the two side surfaces continued (exact) and by the faces at the ends. The chord lies on the far
     side of the arc, so the piece holds the whole rounded region; the rest of it overlaps material (convex) or air
     (hollow) and changes nothing."""
     try:
         i = d["face"]
-        others = _strip_others(i, faces, adj, picked, any_surface=True)
+        others = _strip_others(i, faces, adj, picked, any_surface=True, emap=emap)
         if others is None:
             return None
         (ea, fa, _), (eb, fb, _) = others[0], others[1]
@@ -617,18 +635,22 @@ def fill_wedges(shape, face_ids, faces=None):
     rings = {}
     _wedge.facets = _wedge.curved = 0
     rounds = {}
+    loose = []          # round pieces: they also hold the sliver between chord and arc, which is material (convex) or
+                        # air (hollow) already, so the volume they change is less than their own
     curved_ids = [i for i in picked if type(faces[i].Surface).__name__ not in ("Plane", "Cylinder", "Cone", "Toroid", "Sphere")]
     if curved_ids:
         try:
             rounds = {d["face"]: d for d in strip_plan(shape, sorted(picked), faces) if d["kind"] == "fillet"}
         except Exception:
             rounds = {}
+    emap = _edge_map(faces, adj, list(rounds)) if rounds else None
     for i in sorted(picked):
         f = faces[i]
         if i in rounds:                             # a round along a curved edge: fill / cut its corner piece
-            w = _round_piece(f, rounds[i], faces, adj, picked)
+            w = _round_piece(f, rounds[i], faces, adj, picked, emap)
             if w is not None:
                 (add if rounds[i]["convex"] else cut).append(w)
+                loose.append(w)
                 done.append(i)
                 _wedge.curved += 1
             continue
@@ -671,9 +693,15 @@ def fill_wedges(shape, face_ids, faces=None):
         if not out.Solids or len(out.Solids) != len(shape.Solids):
             return None, []
         out = out.Solids[0] if len(out.Solids) == 1 else out
-        want = shape.Volume + sum(w.Volume for w in add) - sum(w.Volume for w in cut)
-        if not out.isValid() or abs(out.Volume - want) > 1e-5 * max(abs(want), 1.0) + 1e-3:
+        ids_loose = {id(w) for w in loose}
+        want = shape.Volume + sum(w.Volume for w in add if id(w) not in ids_loose)             - sum(w.Volume for w in cut if id(w) not in ids_loose)
+        tol = 1e-5 * max(abs(want), 1.0) + 1e-3
+        lo = want - sum(w.Volume for w in cut if id(w) in ids_loose) - tol
+        hi = want + sum(w.Volume for w in add if id(w) in ids_loose) + tol
+        if not out.isValid() or not lo <= out.Volume <= hi:
             return None, []
+        if loose and abs(out.Volume - shape.Volume) < 1e-9:
+            return None, []     # nothing changed at all: the pieces did not reach the part
         refined = out.copy().removeSplitter()
         if refined.isValid() and abs(refined.Volume - out.Volume) <= 1e-6 * max(out.Volume, 1.0):
             out = refined
@@ -808,6 +836,15 @@ def curved_fillets(shape, faces=None, adj=None):
     return out
 
 
+def _edge_map(faces, adj, ids):
+    """edge hash -> [(face, edge)] for faces ids and their neighbours (see curved_fillets)."""
+    emap = {}
+    for j in {j for i in ids for j in adj[i]} | set(ids):
+        for e in faces[j].Edges:
+            emap.setdefault(e.hashCode(), []).append((j, e))
+    return emap
+
+
 def _strip_others(i, faces, adj, picked, any_surface=False, emap=None):
     """[(edge, neighbour face, its number)] for strip i, longest edges first, or None if it is not a simple strip."""
     f = faces[i]
@@ -836,7 +873,11 @@ def strip_plan(shape, face_ids, faces=None):
     numbers only, so it can be stored in the document."""
     faces = faces if faces is not None else shape.Faces
     picked = set(int(i) for i in face_ids)
+    key = (len(faces), round(shape.Volume, 6), round(shape.Area, 6), tuple(sorted(picked)))
+    if key in _PLANS:
+        return [dict(d) for d in _PLANS[key]]
     adj = _adjacent(faces)
+    emap = _edge_map(faces, adj, picked)
     out = []
 
     def r6(v):
@@ -844,7 +885,7 @@ def strip_plan(shape, face_ids, faces=None):
 
     for i in sorted(picked):
         try:
-            others = _strip_others(i, faces, adj, picked, any_surface=True)
+            others = _strip_others(i, faces, adj, picked, any_surface=True, emap=emap)
             if others is None:
                 continue
             f = faces[i]
@@ -888,7 +929,12 @@ def strip_plan(shape, face_ids, faces=None):
                         **({"m": [r6(v) for v in M]} if radius else {})})
         except Exception:
             continue
+    if len(_PLANS) > 16:
+        _PLANS.clear()
+    _PLANS[key] = [dict(d) for d in out]
     return out
+
+_PLANS = {}
 
 
 def strip_tool(d, k):

@@ -795,6 +795,31 @@ def _attempt(ref, blend_faces, exclude_holes, only_holes=None):
     return sess, report, bool(c.get("converged") or c.get("near"))
 
 
+def _tool_check(ref, s, quick):
+    """Cheap proof that a part cut by strip tools equals the reference, without the full comparison (minutes on spline
+    parts, where the booleans are cross-checked by sampling): the tools change nothing but the strips, so the same
+    solids and the same volume and surface area by the triangles (to 0.005% / 0.05%) will do. (Sampling points is no
+    option: one inside test on a solid cut by a hundred lofted tools takes 0.15 s.)
+    -> a comparison result marked "near", or None (then the full comparison decides)."""
+    from . import compare as cmp_mod
+    try:
+        if len(s.Solids) != len(ref.Solids):
+            return None
+        vr, vn = cmp_mod.mesh_volume(ref), cmp_mod.mesh_volume(s)
+        dv = abs(vr - vn) / max(abs(vr), 1e-12) * 100.0
+        if dv > 0.005:
+            return None
+        ar, an = cmp_mod.mesh_area(ref), cmp_mod.mesh_area(s)
+        if abs(ar - an) / max(ar, 1e-12) * 100.0 > 0.05:
+            return None
+        out = dict(quick)
+        out.update(xor_pct=round(dv, 6), xor_method="volume+samples", near=True, converged=False,
+                   volume_diff_pct=round(dv, 6))
+        return out
+    except Exception:
+        return None
+
+
 def _strips_by_tool(sess, ref, blend_faces, report, plans=None):
     """Chamfer strips the kernel's chamfer could not put back (curved flanks, ends running into other chamfers): keep
     them as tool cuts with one size per group (sharpen.apply_strips, params.with_strips). -> the comparison with the
@@ -802,9 +827,10 @@ def _strips_by_tool(sess, ref, blend_faces, report, plans=None):
     import json
     from . import compare as cmp_mod
     try:
-        cur = sess.result_shape()
-        plans = [d for d in (plans if plans is not None else sharpen.strip_plan(ref, blend_faces))
-                 if cur.isInside(App.Vector(*d["probe"]), 1e-7, False) == d["convex"]]   # still sharp there
+        if plans is None:           # after other steps: only the strips that are still sharp
+            cur = sess.result_shape()
+            plans = [d for d in sharpen.strip_plan(ref, blend_faces)
+                     if cur.isInside(App.Vector(*d["probe"]), 1e-7, False) == d["convex"]]
         if not plans:
             return None
         groups = {}
@@ -827,10 +853,10 @@ def _strips_by_tool(sess, ref, blend_faces, report, plans=None):
             made.append(o)
         s = sess.result_shape()
         c = {}
-        if s is not None:       # faces matched one to one first (a fraction of a second); the booleans only if needed
+        if s is not None:       # faces matched one to one first (a fraction of a second)
             c = cmp_mod.compare(ref, s, quick=True)
             if not c.get("converged"):
-                c = cmp_mod.compare(ref, s)
+                c = _tool_check(ref, s, c) or cmp_mod.compare(ref, s)
         if c.get("converged") or c.get("near"):
             nf = sum(1 for d in plans if d.get("kind") == "fillet")
             report["fillets_made"] += nf

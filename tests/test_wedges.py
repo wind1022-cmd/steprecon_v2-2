@@ -233,4 +233,50 @@ lg, nl = land_gear()
 gl = [(x["kind"], x["size"], len(x["items"])) for x in machined.scan(lg)["groups"] if x["kind"] == "fillet"]
 report("cylindrical tooth-tip lands (R42.55, seen on a user's ring gear) are not fillets; the R0.5 rounds are",
        gl == [("fillet", 0.5, nl)], str(gl))
+# ------------------------------------------------------------ ring gear: hollow rounds at the roots (seen on a user's part)
+def ring_gear(z=20, rroot=42.55, rtip=40.0, r=0.5):
+    d = 2 * math.pi / z
+    pt = lambda rad, a: V(rad * math.cos(a), rad * math.sin(a), 0)  # noqa: E731
+    es = []
+    for i in range(z):
+        a = i * d
+        es.append(Part.makeLine(pt(rtip, a), pt(rtip, a + 0.2 * d)))
+        c1 = Part.BSplineCurve()
+        c1.interpolate([pt(rtip, a + 0.2 * d), pt(rtip + 0.9, a + 0.27 * d), pt(rtip + 1.8, a + 0.33 * d), pt(rroot, a + 0.4 * d)])
+        es.append(c1.toShape())
+        es.append(Part.Arc(pt(rroot, a + 0.4 * d), pt(rroot, a + 0.5 * d), pt(rroot, a + 0.6 * d)).toShape())
+        c2 = Part.BSplineCurve()
+        c2.interpolate([pt(rroot, a + 0.6 * d), pt(rtip + 1.8, a + 0.67 * d), pt(rtip + 0.9, a + 0.73 * d), pt(rtip, a + 0.8 * d)])
+        es.append(c2.toShape())
+        es.append(Part.makeLine(pt(rtip, a + 0.8 * d), pt(rtip, a + d)))
+    b = Part.makeCylinder(60, W).cut(Part.Face(Part.Wire(es)).extrude(V(0, 0, W)))
+    roots = [e for e in b.Edges if e.BoundBox.ZLength > W - 1e-6 and abs(math.hypot(e.Vertexes[0].Point.x, e.Vertexes[0].Point.y) - rroot) < 1e-6]
+    return b, b.makeFillet(r, roots), len(roots)
+
+
+rb, rg, nr = ring_gear()
+scr = machined.scan(rg)
+rgr = [x for x in scr["groups"] if x["kind"] == "fillet"]
+report("ring gear: the hollow root rounds are fillets R0.5 (and the root land is not)", [(x["size"], len(x["items"])) for x in rgr] == [(0.5, nr)],
+       str([(x["kind"], x["size"], len(x["items"])) for x in scr["groups"]]))
+rids = [it["faces"][0] for it in scr["items"] if rgr and it["id"] in set(rgr[0]["items"])]
+t0 = time.time()
+res = machined.remove_faces_ex(rg, rids)
+took_r = rg.Volume - rb.Volume
+report("ring gear: root rounds removed (a thin sliver may stay where the flank cannot be continued)", res["failed"] == 0
+       and res["shape"].isValid() and abs(res["shape"].Volume - rb.Volume) < 0.03 * took_r,
+       f"{time.time() - t0:.1f}s {res['method']} {res['shape'].Volume - rb.Volume:+.4f} of {took_r:.3f} mm3")
+t0 = time.time()
+sess5, rep5 = machined.build_selected(rg, [], rids, [])
+c5 = rep5.get("_cmp") or {}
+report("ring gear: root rounds as a parameter, equal to the file or near", rep5.get("strip_tools") == len(rids)
+       and rep5["fillets_made"] == len(rids), f"{time.time() - t0:.1f}s")
+pl5 = P.collect(sess5.doc)
+rn5 = [p["name"] for p in pl5 if p["name"].endswith(".Radius")]
+v5 = P.result_shape(sess5.doc).Volume
+P.apply(sess5.doc, pl5, {rn5[0]: 0.3} if rn5 else {})
+s5 = P.result_shape(sess5.doc)
+report("ring gear: R0.5 -> 0.3 gives a valid part with less material in the roots", bool(rn5) and s5 is not None and s5.isValid()
+       and s5.Volume < v5, f"{rn5} {s5.Volume - v5:+.3f} mm3" if s5 is not None else str(P.problems(sess5.doc)))
+App.closeDocument(sess5.doc.Name)
 sys.exit(1 if fails else 0)
