@@ -122,6 +122,9 @@ def _edge_mid(e):
     return e.valueAt((e.FirstParameter + e.LastParameter) / 2.0)
 
 
+MIN_TURN = math.radians(8.0)     # smallest angle a fillet's section turns through (see find_blends)
+
+
 def find_blends(shape):
     """Faces that look like dress-up features: {("fillet", radius) | ("chamfer",): [face indices]}.
 
@@ -143,6 +146,7 @@ def find_blends(shape):
                 continue                                    # more than half a turn: a hole, boss or shaft
             if kind == "Toroid" and abs(v1 - v0) > math.pi + 1e-6:
                 continue
+            turn = abs(u1 - u0) if kind == "Cylinder" else abs(v1 - v0) if kind == "Toroid" else math.pi
             smooth = set()
             for e, j in nb[i]:
                 g = faces[j]
@@ -156,6 +160,20 @@ def find_blends(shape):
                 n1, n2 = _normal_at(f, p), _normal_at(g, p)
                 if n1 is not None and n2 is not None and n1.getAngle(n2) < math.radians(1.0):
                     smooth.add(j)
+            if len(smooth) >= 2 and turn < MIN_TURN:
+                # turns only a few degrees and runs into smaller rounds on both sides: a land between two rounds (the
+                # tip / root of a gear's tooth stored as a cylinder of the tip radius, seen as "fillet R42.55"), not a
+                # fillet. A small fillet that turns little (between two nearly parallel faces) has flat neighbours.
+                def rounder(j):
+                    gs = faces[j].Surface
+                    k = type(gs).__name__
+                    if k == "Cylinder":
+                        return gs.Radius < 0.5 * radius
+                    if k == "Toroid":
+                        return gs.MinorRadius < 0.5 * radius
+                    return k not in ("Plane", "Cone", "Sphere", "SurfaceOfExtrusion")
+                if sum(1 for j in smooth if rounder(j)) >= 2:
+                    continue
             if len(smooth) >= 2:
                 groups.setdefault(("fillet", round(radius, 4)), []).append(i)
         else:       # plane, cone, or the ruled / spline strip of a chamfer along a curved edge (gear flanks ...)

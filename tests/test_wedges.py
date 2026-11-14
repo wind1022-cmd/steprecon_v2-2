@@ -208,4 +208,29 @@ P.apply(doc, plist, {size: 0.8})
 doc.recompute()
 s = P.result_shape(doc)
 report("chamfer 0.4 -> 0.8 rebuilds a valid, smaller part", not P.problems(doc) and s.isValid() and s.Volume < v0 - 1.0, f"{s.Volume - v0:+.2f} mm3")
+# ------------------------------------------------------------ a tooth-tip land between two rounds is not a fillet
+def land_gear(z=54, ro=42.55, rr=40.0):
+    d = 2 * math.pi / z
+    pt = lambda r, a: V(r * math.cos(a), r * math.sin(a), 0)  # noqa: E731
+    es = []
+    for i in range(z):
+        a = i * d
+        es.append(Part.makeLine(pt(rr, a), pt(rr, a + 0.2 * d)))
+        c1 = Part.BSplineCurve()
+        c1.interpolate([pt(rr, a + 0.2 * d), pt(rr + 0.9, a + 0.27 * d), pt(rr + 1.8, a + 0.33 * d), pt(ro, a + 0.4 * d)])
+        es.append(c1.toShape())
+        es.append(Part.Arc(pt(ro, a + 0.4 * d), pt(ro, a + 0.5 * d), pt(ro, a + 0.6 * d)).toShape())   # cylinder land
+        c2 = Part.BSplineCurve()
+        c2.interpolate([pt(ro, a + 0.6 * d), pt(rr + 1.8, a + 0.67 * d), pt(rr + 0.9, a + 0.73 * d), pt(rr, a + 0.8 * d)])
+        es.append(c2.toShape())
+        es.append(Part.makeLine(pt(rr, a + 0.8 * d), pt(rr, a + d)))
+    b = Part.Face(Part.Wire(es)).extrude(V(0, 0, W)).cut(Part.makeCylinder(20, W))
+    tips = [e for e in b.Edges if e.BoundBox.ZLength > W - 1e-6 and abs(math.hypot(e.Vertexes[0].Point.x, e.Vertexes[0].Point.y) - ro) < 1e-6]
+    return b.makeFillet(0.5, tips), len(tips)
+
+
+lg, nl = land_gear()
+gl = [(x["kind"], x["size"], len(x["items"])) for x in machined.scan(lg)["groups"] if x["kind"] == "fillet"]
+report("cylindrical tooth-tip lands (R42.55, seen on a user's ring gear) are not fillets; the R0.5 rounds are",
+       gl == [("fillet", 0.5, nl)], str(gl))
 sys.exit(1 if fails else 0)
