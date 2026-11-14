@@ -326,4 +326,52 @@ s6 = P.result_shape(sess6.doc)
 report("full-round root: R0.5 -> 0.3 gives a valid part with less material in the roots", bool(rn6) and s6 is not None
        and s6.isValid() and s6.Volume < v6, f"{rn6} {s6.Volume - v6:+.3f} mm3" if s6 is not None else str(P.problems(sess6.doc)))
 App.closeDocument(sess6.doc.Name)
+
+
+# ---------- tooth slots that stop part-way (seen on a user's ring gear): floor = cone, end wall = plane, R0.5 between
+# them = torus pieces, each ended by the two tooth flanks
+def stopped_slots(z=20, rv=42.55, rtip=40.0, r=0.5, zs=10.0):
+    d = 2 * math.pi / z
+    pt = lambda rad, a: V(rad * math.cos(a), rad * math.sin(a), 0)  # noqa: E731
+    slots = []
+    for i in range(z):
+        a = i * d
+        c1 = Part.BSplineCurve()
+        c1.interpolate([pt(rtip - 1, a + 0.22 * d), pt(rtip + 0.9, a + 0.29 * d), pt(rv + 1.0, a + 0.38 * d)])
+        c2 = Part.BSplineCurve()
+        c2.interpolate([pt(rv + 1.0, a + 0.62 * d), pt(rtip + 0.9, a + 0.71 * d), pt(rtip - 1, a + 0.78 * d)])
+        f = Part.Face(Part.Wire([c1.toShape(), Part.makeLine(pt(rv + 1.0, a + 0.38 * d), pt(rv + 1.0, a + 0.62 * d)),
+                                 c2.toShape(), Part.makeLine(pt(rtip - 1, a + 0.78 * d), pt(rtip - 1, a + 0.22 * d))]))
+        f.translate(V(0, 0, -1))
+        slots.append(f.extrude(V(0, 0, zs + 1)))
+    cutter = Part.makeCompound(slots).common(Part.makeCone(rv + 0.1, rv - 0.15, zs + 1, V(0, 0, -1)))
+    b = Part.makeCylinder(60, W).cut(Part.makeCylinder(rtip, W)).cut(cutter).removeSplitter()
+    es = [e for e in b.Edges if type(e.Curve).__name__ == "Circle" and abs(e.BoundBox.ZMin - zs) < 1e-6
+          and abs(e.BoundBox.ZMax - zs) < 1e-6 and abs(math.hypot(e.Vertexes[0].Point.x, e.Vertexes[0].Point.y) - 42.3) < 0.5]
+    return b, b.makeFillet(r, es), len(es)
+
+
+tb_, tg, nt = stopped_slots()
+sct = machined.scan(tg)
+tgr = [x for x in sct["groups"] if x["kind"] == "fillet"]
+tids = [it["faces"][0] for it in sct["items"] if tgr and it["id"] in set(tgr[0]["items"])]
+report("stopped slots: the R0.5 at the slot ends are torus pieces, one group", [(x["size"], len(x["items"])) for x in tgr] == [(0.5, nt)]
+       and all(type(tg.Faces[i].Surface).__name__ == "Toroid" for i in tids), str([(x["kind"], x["size"], len(x["items"])) for x in sct["groups"]]))
+t0 = time.time()
+res = machined.remove_faces_ex(tg, tids)
+report("stopped slots: R0.5 removed back to the sharp corner, exact", res["failed"] == 0 and res["shape"] is not None
+       and res["shape"].isValid() and abs(res["shape"].Volume - tb_.Volume) < 1e-3 * (tg.Volume - tb_.Volume),
+       f"{time.time() - t0:.1f}s {res['method']}")
+t0 = time.time()
+sess7, rep7 = machined.build_selected(tg, [], tids, [])
+report("stopped slots: R0.5 as a parameter", rep7.get("strip_tools") == len(tids) and rep7["fillets_made"] == len(tids)
+       and (rep7.get("_cmp") or {}).get("near") or (rep7.get("_cmp") or {}).get("converged"), f"{time.time() - t0:.1f}s {rep7.get('skipped')}")
+pl7 = P.collect(sess7.doc)
+rn7 = [p["name"] for p in pl7 if p["name"].endswith(".Radius")]
+v7 = P.result_shape(sess7.doc).Volume
+P.apply(sess7.doc, pl7, {rn7[0]: 0.3} if rn7 else {})
+s7 = P.result_shape(sess7.doc)
+report("stopped slots: R0.5 -> 0.3 gives a valid part with less material in the corners", bool(rn7) and s7 is not None
+       and s7.isValid() and s7.Volume < v7, f"{rn7} {s7.Volume - v7:+.3f} mm3" if s7 is not None else str(P.problems(sess7.doc)))
+App.closeDocument(sess7.doc.Name)
 sys.exit(1 if fails else 0)

@@ -546,6 +546,8 @@ def _round_piece(f, d, faces, adj, picked, emap=None, mode="split"):
     fallback where a side surface ends short of the corner."""
     try:
         i = d["face"]
+        if d.get("rev"):
+            return _rev_piece(d, faces) if mode == "split" else None
         others = _strip_others(i, faces, adj, picked, any_surface=True, emap=emap)
         if others is None:
             return None
@@ -606,6 +608,34 @@ def _round_piece(f, d, faces, adj, picked, emap=None, mode="split"):
         return w
     except Exception:
         return None
+
+
+def _rev_piece(d, faces):
+    """_round_piece for a torus piece: corner - arc turned about the axis, split by the faces at its ends (continued);
+    the cell that holds the round."""
+    tool = _rev_tool(d, 1.0, exact=True)
+    if tool is None:
+        return None
+    walls = [_wide_face(faces[j]) for j in d["rev"]["end_faces"]]
+    if any(w is None for w in walls):
+        return None
+    c = App.Vector(*d["probe"])
+    cells = [x for x in tool.generalFuse(walls)[0].Solids if x.BoundBox.isInside(c)]
+    cells = [x for x in cells if x.isInside(c, 1e-7, False)]
+    if len(cells) != 1:
+        return None
+    w = cells[0]
+    if not w.isValid() or w.Volume < 1e-12 or w.Volume > tool.Volume * (1 - 1e-6):
+        return None
+    def on(wall, x):
+        try:
+            return wall.distToShape(Part.Vertex(x.valueAt(*x.Surface.parameter(x.CenterOfMass))))[0] < 1e-6
+        except Exception:
+            return False
+    for wall in walls:              # every end must close the cell
+        if not any(on(wall, x) for x in w.Faces):
+            return None
+    return w
 
 
 def _ring(i, faces, adj):
@@ -675,7 +705,7 @@ def fill_wedges(shape, face_ids, faces=None):
     rounds = {}
     loose = []          # round pieces: they also hold the sliver between chord and arc, which is material (convex) or
                         # air (hollow) already, so the volume they change is less than their own
-    curved_ids = [i for i in picked if type(faces[i].Surface).__name__ not in ("Plane", "Cylinder", "Cone", "Toroid", "Sphere")]
+    curved_ids = [i for i in picked if type(faces[i].Surface).__name__ not in ("Plane", "Cylinder", "Cone", "Sphere")]
     if curved_ids:
         try:
             rounds = {d["face"]: d for d in strip_plan(shape, sorted(picked), faces) if d["kind"] == "fillet"}
@@ -949,10 +979,15 @@ def strip_plan(shape, face_ids, faces=None):
 
     for i in sorted(picked):
         try:
+            f = faces[i]
+            if type(f.Surface).__name__ == "Toroid":
+                d = _rev_plan(i, faces, adj, emap, shape)
+                if d is not None:
+                    out.append(d)
+                continue
             others = _strip_others(i, faces, adj, picked, any_surface=True, emap=emap)
             if others is None:
                 continue
-            f = faces[i]
             if type(f.Surface).__name__ in ("Cylinder", "Toroid", "Sphere", "Cone"):
                 continue                            # analytic rounds: PartDesign's fillet takes those
             (ea, fa, _), (eb, fb, _) = others[0], others[1]
@@ -1001,12 +1036,155 @@ def strip_plan(shape, face_ids, faces=None):
 _PLANS = {}
 
 
+# ------------------------------------------------- a round that runs round an axis but stops at other faces (torus piece)
+# e.g. the corner between the floor (cone) and the end wall (plane) of a tooth slot that stops part-way, ended by the
+# two tooth flanks. Its section is the same in every half-plane through the axis, so the corner piece is that section
+# turned about the axis; PartDesign's fillet cannot put it back on the short arcs between the flanks.
+def _is_coaxial_circle(e, C, z):
+    c = e.Curve
+    if type(c).__name__ != "Circle":
+        return False
+    ax = App.Vector(c.Axis)
+    if ax.cross(z).Length > 1e-6:
+        return False
+    w = App.Vector(c.Center) - C
+    return (w - z * w.dot(z)).Length < 1e-5
+
+
+def _rev_plan(i, faces, adj, emap, shape):
+    """strip_plan for a torus piece i (see above), or None. Its two long edges are circles about the torus' axis
+    (where it meets the two faces it rounds); the others end it, and at least one of those is not flat."""
+    f = faces[i]
+    srf = f.Surface
+    C, z = App.Vector(srf.Center), App.Vector(srf.Axis)
+    z.normalize()
+    R, r = srf.MajorRadius, srf.MinorRadius
+    side, ends = [], []
+    for e in f.Edges:
+        hit = sorted({j for j, x in emap.get(e.hashCode(), ()) if j != i and j in adj[i] and e.isSame(x)})
+        if len(hit) != 1:
+            return None
+        (side if _is_coaxial_circle(e, C, z) else ends).append((e, hit[0]))
+    if len(side) != 2 or side[0][1] == side[1][1] or len(ends) < 2:
+        return None
+    if all(_plane_of(faces[j]) is not None for _, j in ends):
+        return None                                 # flat ends: PartDesign's fillet takes those
+    w = f.CenterOfMass - C
+    e1 = w - z * w.dot(z)
+    if e1.Length < 1e-9:
+        return None
+    e1.normalize()
+    e2 = z.cross(e1)
+    angs = []
+    for e in f.Edges:
+        for q in e.discretize(16):
+            v = q - C
+            angs.append(math.atan2(v.dot(e2), v.dot(e1)))
+    a0, a1 = min(angs), max(angs)
+    if a1 - a0 > math.pi or a1 - a0 < 1e-6:
+        return None
+    V = App.Vector
+
+    def rz(q):
+        v = q - C
+        h = v.dot(z)
+        return V((v - z * h).Length, h, 0)
+
+    ta, tb = (rz(e.valueAt((e.FirstParameter + e.LastParameter) / 2.0)) for e, _ in side)
+    cc = V(R, 0, 0)
+    if abs((ta - cc).Length - r) > 0.01 * r or abs((tb - cc).Length - r) > 0.01 * r:
+        return None
+    da, db = ta - cc, tb - cc
+    da, db = V(-da.y, da.x, 0), V(-db.y, db.x, 0)      # the faces' lines in the section: square to the radius
+    den = da.x * db.y - da.y * db.x
+    if abs(den) < 1e-9:
+        return None                                 # parallel: not a corner
+    q = tb - ta
+    t = (q.x * db.y - q.y * db.x) / den
+    P2 = ta + da * t
+    u = P2 - cc
+    if u.Length < 1e-9:
+        return None
+    u.normalize()
+    M2 = cc + u * r
+    mg = 0.25 * (a1 - a0)                           # the tool runs on a little past the ends (into material / air)
+
+    def at(p2, a):
+        return C + (e1 * math.cos(a) + e2 * math.sin(a)) * p2.x + z * p2.y
+
+    def r6(v):
+        return [round(v.x, 7), round(v.y, 7), round(v.z, 7)]
+
+    am = 0.5 * (a0 + a1)
+    stations = [a0 + (a1 - a0) * k / 4.0 for k in range(5)]
+    probe = at((M2 + P2) * 0.5, am)
+    leg = 0.5 * ((ta - P2).Length + (tb - P2).Length)
+    return {"face": i, "a": [r6(at(ta, a)) for a in stations], "b": [r6(at(tb, a)) for a in stations],
+            "p": [r6(at(P2, a)) for a in stations], "m": [r6(at(M2, a)) for a in stations], "ends": [],
+            "convex": not shape.isInside(probe, 1e-7, False), "leg": leg, "width": r, "slack": 0.0,
+            "probe": r6(probe), "straight": False, "reach": f.BoundBox.DiagonalLength, "kind": "fillet", "size": r,
+            "rev": {"c": r6(C), "z": r6(z), "e1": r6(e1), "e2": r6(e2), "a0": a0 - mg, "a1": a1 + mg,
+                    "ta": [ta.x, ta.y], "tb": [tb.x, tb.y], "p": [P2.x, P2.y], "m": [M2.x, M2.y],
+                    "end_faces": [j for _, j in ends]}}
+
+
+def _rev_tool(d, k, exact=False):
+    """strip_tool for a torus piece: the section (corner - arc, scaled by k about the corner) turned about the axis
+    over the piece and a little past its ends. Not exact: widened outwards past the two faces, so no face of the tool
+    lies on one of the part (and past the ends it only meets material it fuses with / air it cuts). exact: just the
+    corner - arc region (to remove the round, then split by the end faces)."""
+    V = App.Vector
+    rv = d["rev"]
+    C, z, e1, e2 = (V(*rv[q]) for q in ("c", "z", "e1", "e2"))
+    p = V(rv["p"][0], rv["p"][1], 0)
+    a, b, m = (p + (V(rv[q][0], rv[q][1], 0) - p) * k for q in ("ta", "tb", "m"))
+    if exact:
+        pts = [a, m, b, p]
+        edges2 = [("arc", 0, 1, 2), ("line", 2, 3), ("line", 3, 0)]
+    else:
+        uu, ww = a - p, b - p
+        leg = 0.5 * (uu.Length + ww.Length)
+        uu.normalize()
+        ww.normalize()
+        na = (ww - uu * ww.dot(uu)) * -1
+        nb = (uu - ww * uu.dot(ww)) * -1
+        na.normalize()
+        nb.normalize()
+        e = 0.5 * leg + 1e-3
+        bis = uu + ww
+        bis.normalize()
+        pts = [a, m, b, b + nb * e, p - bis * (leg + e), a + na * e]
+        edges2 = [("arc", 0, 1, 2), ("line", 2, 3), ("line", 3, 4), ("line", 4, 5), ("line", 5, 0)]
+    if min(x.x for x in pts) <= 1e-6:
+        return None                                 # would cross the axis
+    a0 = rv["a0"]
+    rad = e1 * math.cos(a0) + e2 * math.sin(a0)
+    P3 = [C + rad * x.x + z * x.y for x in pts]
+    es = []
+    for kind, *ix in edges2:
+        if kind == "arc":
+            es.append(Part.Arc(P3[ix[0]], P3[ix[1]], P3[ix[2]]).toShape())
+        else:
+            es.append(Part.makeLine(P3[ix[0]], P3[ix[1]]))
+    try:
+        sol = Part.Face(Part.Wire(es)).revolve(C, z, math.degrees(rv["a1"] - rv["a0"]))
+        if sol.ShapeType != "Solid":
+            sol = Part.Solid(Part.Shell(sol.Faces))
+        if sol.Volume < 0:
+            sol.reverse()
+        return sol if sol.isValid() and sol.Volume > 1e-12 else None
+    except Exception:
+        return None
+
+
 def strip_tool(d, k):
     """The solid that makes strip d a chamfer k times its original size when cut from (fused to) the sharp part."""
     V = App.Vector
     A, B, P = ([V(*v) for v in d[q]] for q in ("a", "b", "p"))
     n = len(A)
     grow = max(k, 1.0)
+    if d.get("rev"):
+        return _rev_tool(d, k)
     if d.get("kind") == "fillet":
         return _round_tool(d, k, A, B, P, [V(*v) for v in d["m"]], grow)
     secs = []
